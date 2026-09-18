@@ -1,0 +1,17 @@
+# Environment & Secrets
+.env
+.env.local
+*.pem
+*.key
+
+# Local PostgreSQL cluster & runtime data
+.pgdata/
+*.log
+*.pid
+
+# Agent & test caches
+.agents/
+.pytest_cache/
+__pycache__/
+*.pyc
+.coverage

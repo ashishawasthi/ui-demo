@@ -1,0 +1,21 @@
+# Exclude local PostgreSQL 18.6 binaries and data directory (123 MB)
+.pgdata/
+.pgdata
+
+# Exclude agent working directories and logs
+.agents/
+.agents
+
+# Exclude Python virtual environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Exclude git and temporary files
+.git/
+.gitignore
+*.log
+/tmp/

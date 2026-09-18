@@ -1,0 +1,1331 @@
+/* ============================================================================
+   DBS IDEAL Corporate Banking — Change of Account Mandate & Gemini Live 3.8 UI
+   Elevated Split-Screen Executive Workspace Stylesheet
+   ============================================================================ */
+
+:root {
+  --dbs-red: #CC0000;
+  --dbs-red-hover: #A30000;
+  --dbs-red-soft: #FEF2F2;
+  --dbs-red-border: #FECACA;
+  --dbs-dark: #1F242E;
+  --dbs-charcoal: #111827;
+  --dbs-slate: #1E293B;
+  --dbs-gray-bg: #F3F5F8;
+  --dbs-surface: #FFFFFF;
+  --dbs-border: #E2E8F0;
+  --dbs-border-strong: #CBD5E1;
+  --dbs-text-primary: #0F172A;
+  --dbs-text-secondary: #475569;
+  --dbs-text-muted: #64748B;
+  --dbs-green: #059669;
+  --dbs-green-bg: #ECFDF5;
+  --dbs-green-border: #A7F3D0;
+  --dbs-blue: #0284C7;
+  --dbs-blue-bg: #E0F2FE;
+  --dbs-blue-border: #BAE6FD;
+  --dbs-amber: #D97706;
+  --dbs-amber-bg: #FFFBEB;
+  --dbs-amber-border: #FDE68A;
+  --dbs-purple: #7C3AED;
+  --dbs-purple-bg: #F5F3FF;
+  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-sm: 0 2px 6px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 6px 16px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 12px 28px rgba(15, 23, 42, 0.12);
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  font-family: var(--font-sans);
+  background-color: var(--dbs-gray-bg);
+  color: var(--dbs-text-primary);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ============================================================================
+   1. Top Global Header & Live Entity Switcher
+   ============================================================================ */
+
+.global-header {
+  background: var(--dbs-charcoal);
+  color: #FFFFFF;
+  border-bottom: 3px solid var(--dbs-red);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  box-shadow: var(--shadow-md);
+}
+
+.header-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.brand-cluster {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.dbs-logo-spark {
+  width: 26px;
+  height: 26px;
+  background: var(--dbs-red);
+  transform: rotate(45deg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  box-shadow: 0 0 12px rgba(204, 0, 0, 0.6);
+  flex-shrink: 0;
+}
+
+.dbs-logo-spark::after {
+  content: '';
+  width: 10px;
+  height: 10px;
+  background: #FFFFFF;
+  border-radius: 1px;
+}
+
+.brand-title-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.brand-wordmark {
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand-wordmark .ideal-pill {
+  background: var(--dbs-red);
+  color: #FFFFFF;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 4px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.brand-subtitle {
+  font-size: 11px;
+  color: #94A3B8;
+  font-weight: 500;
+}
+
+.entity-switcher-cluster {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.switcher-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #94A3B8;
+  font-weight: 600;
+}
+
+.entity-select {
+  background: #1E293B;
+  color: #FFFFFF;
+  border: 1px solid #334155;
+  border-radius: var(--radius-sm);
+  padding: 7px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  min-width: 290px;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.entity-select:hover, .entity-select:focus {
+  border-color: var(--dbs-red);
+  box-shadow: 0 0 0 2px rgba(204, 0, 0, 0.25);
+}
+
+.system-status-cluster {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #E2E8F0;
+}
+
+.status-pill.pg-live {
+  background: rgba(5, 150, 105, 0.18);
+  border-color: rgba(16, 185, 129, 0.4);
+  color: #6EE7B7;
+}
+
+.status-pill.gemini-live {
+  background: rgba(124, 58, 237, 0.2);
+  border-color: rgba(167, 139, 250, 0.4);
+  color: #DDD6FE;
+}
+
+.pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #10B981;
+  box-shadow: 0 0 8px #10B981;
+  animation: pulseGlow 2s infinite;
+}
+
+@keyframes pulseGlow {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(1.2); }
+}
+
+/* Quick-Pill Corporate Profile Bar + Live Entity Metadata Strip */
+.header-entity-bar {
+  background: #18202F;
+  border-top: 1px solid #263147;
+  padding: 8px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.profile-quick-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.profile-pill-btn {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #CBD5E1;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.profile-pill-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #FFFFFF;
+}
+
+.profile-pill-btn.active {
+  background: var(--dbs-red);
+  border-color: #EF4444;
+  color: #FFFFFF;
+  box-shadow: 0 2px 8px rgba(204, 0, 0, 0.35);
+}
+
+.entity-telemetry-badges {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.telemetry-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #CBD5E1;
+}
+
+.telemetry-item .label {
+  color: #94A3B8;
+  font-size: 11px;
+}
+
+.telemetry-item .val {
+  font-weight: 700;
+  color: #FFFFFF;
+  font-family: var(--font-mono);
+}
+
+.telemetry-item.balance-highlight {
+  background: rgba(2, 132, 199, 0.18);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+}
+
+.telemetry-item.balance-highlight .val {
+  color: #38BDF8;
+}
+
+/* ============================================================================
+   2. Split-Screen Executive Workspace Layout (70% Main Canvas / 30% Copilot Dock)
+   ============================================================================ */
+
+.workspace-split-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 410px;
+  min-height: calc(100vh - 102px);
+  align-items: start;
+}
+
+@media (max-width: 1200px) {
+  .workspace-split-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.main-mandate-canvas {
+  padding: 20px 26px 48px;
+  max-width: 1240px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* ============================================================================
+   3. Interactive 5-Stage Horizontal Stepper
+   ============================================================================ */
+
+.stage-stepper-bar {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+  margin-bottom: 20px;
+  background: var(--dbs-surface);
+  padding: 12px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--dbs-border);
+  box-shadow: var(--shadow-xs);
+}
+
+.stage-step-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  background: #F8FAFC;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.18s ease;
+  position: relative;
+}
+
+.stage-step-btn:hover {
+  background: #F1F5F9;
+  border-color: var(--dbs-border-strong);
+}
+
+.stage-step-btn.active {
+  background: var(--dbs-red-soft);
+  border-color: var(--dbs-red);
+  box-shadow: 0 2px 8px rgba(204, 0, 0, 0.1);
+}
+
+.stage-step-btn.completed {
+  background: var(--dbs-green-bg);
+  border-color: var(--dbs-green-border);
+}
+
+.step-num-circle {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #E2E8F0;
+  color: var(--dbs-text-secondary);
+  font-weight: 700;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.stage-step-btn.active .step-num-circle {
+  background: var(--dbs-red);
+  color: #FFFFFF;
+}
+
+.stage-step-btn.completed .step-num-circle {
+  background: var(--dbs-green);
+  color: #FFFFFF;
+}
+
+.step-text-wrap {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.step-kicker {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--dbs-text-muted);
+  font-weight: 700;
+}
+
+.step-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--dbs-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ============================================================================
+   4. Stage Panels, Cards, & Shared Components
+   ============================================================================ */
+
+.stage-panel {
+  display: none;
+  animation: fadeSlideIn 0.22s ease;
+}
+
+.stage-panel.active {
+  display: block;
+}
+
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.section-card {
+  background: var(--dbs-surface);
+  border: 1px solid var(--dbs-border);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px;
+  margin-bottom: 18px;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.section-card.flash-highlight, .flash-highlight {
+  animation: syncPulseHighlight 1.8s ease;
+}
+
+@keyframes syncPulseHighlight {
+  0% { box-shadow: 0 0 0 0 rgba(204, 0, 0, 0.45); border-color: var(--dbs-red); background-color: #FFF5F5; }
+  50% { box-shadow: 0 0 0 8px rgba(204, 0, 0, 0); border-color: var(--dbs-red); }
+  100% { box-shadow: var(--shadow-sm); }
+}
+
+.card-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--dbs-border);
+}
+
+.card-title-block h2 {
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--dbs-text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-title-block p {
+  font-size: 12.5px;
+  color: var(--dbs-text-secondary);
+  margin-top: 3px;
+}
+
+/* Badges */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.badge-green { background: var(--dbs-green-bg); color: var(--dbs-green); border: 1px solid var(--dbs-green-border); }
+.badge-red { background: var(--dbs-red-soft); color: var(--dbs-red); border: 1px solid var(--dbs-red-border); }
+.badge-blue { background: var(--dbs-blue-bg); color: var(--dbs-blue); border: 1px solid var(--dbs-blue-border); }
+.badge-amber { background: var(--dbs-amber-bg); color: var(--dbs-amber); border: 1px solid var(--dbs-amber-border); }
+.badge-purple { background: var(--dbs-purple-bg); color: var(--dbs-purple); border: 1px solid #DDD6FE; }
+.badge-slate { background: #F1F5F9; color: #334155; border: 1px solid #CBD5E1; }
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--dbs-red);
+  color: #FFFFFF;
+  box-shadow: 0 2px 6px rgba(204, 0, 0, 0.25);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--dbs-red-hover);
+}
+
+.btn-secondary {
+  background: #FFFFFF;
+  color: var(--dbs-text-primary);
+  border-color: var(--dbs-border-strong);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: #F8FAFC;
+  border-color: #94A3B8;
+}
+
+.btn-danger-outline {
+  background: #FFFFFF;
+  color: var(--dbs-red);
+  border-color: var(--dbs-red-border);
+  padding: 5px 10px;
+  font-size: 11.5px;
+}
+
+.btn-danger-outline:hover:not(:disabled) {
+  background: var(--dbs-red-soft);
+  border-color: var(--dbs-red);
+}
+
+.btn-success {
+  background: var(--dbs-green);
+  color: #FFFFFF;
+}
+
+.btn-success:hover:not(:disabled) {
+  background: #047857;
+}
+
+/* ============================================================================
+   5. Stage 1 — Entity Overview & Target Accounts Grid
+   ============================================================================ */
+
+.entity-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.entity-meta-box {
+  background: #F8FAFC;
+  border: 1px solid var(--dbs-border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+}
+
+.entity-meta-box .meta-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--dbs-text-muted);
+  font-weight: 600;
+}
+
+.entity-meta-box .meta-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--dbs-text-primary);
+  margin-top: 3px;
+}
+
+.accounts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.account-card {
+  background: #FFFFFF;
+  border: 2px solid var(--dbs-border);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.account-card:hover {
+  border-color: #94A3B8;
+  box-shadow: var(--shadow-sm);
+}
+
+.account-card.selected {
+  border-color: var(--dbs-red);
+  background: linear-gradient(180deg, #FFFDFD 0%, #FFF7F7 100%);
+}
+
+.account-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.account-checkbox-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.account-checkbox-wrap input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--dbs-red);
+  cursor: pointer;
+}
+
+.account-number-mono {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--dbs-text-primary);
+}
+
+.account-balance-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding-top: 10px;
+  border-top: 1px dashed var(--dbs-border);
+}
+
+.account-balance-val {
+  font-family: var(--font-mono);
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--dbs-text-primary);
+}
+
+/* ============================================================================
+   6. Stage 2 — Signatory Matrix (Group A / B / C) & OCR Dropzone + Governance Alert
+   ============================================================================ */
+
+.governance-alert-banner {
+  background: #FEF2F2;
+  border: 2px solid #DC2626;
+  border-radius: var(--radius-md);
+  padding: 14px 18px;
+  margin-bottom: 18px;
+  display: none;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  box-shadow: 0 4px 12px rgba(220, 38, 38, 0.15);
+}
+
+.governance-alert-banner.visible {
+  display: flex;
+}
+
+.governance-alert-content h4 {
+  color: #991B1B;
+  font-size: 14px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.governance-alert-content p {
+  color: #7F1D1D;
+  font-size: 12.5px;
+  margin-top: 4px;
+}
+
+.signatory-groups-columns {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+@media (max-width: 980px) {
+  .signatory-groups-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+.group-column {
+  background: #F8FAFC;
+  border: 1px solid var(--dbs-border);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.group-column-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 10px;
+  border-bottom: 2px solid var(--dbs-border-strong);
+}
+
+.group-column.group-a .group-column-header { border-bottom-color: var(--dbs-red); }
+.group-column.group-b .group-column-header { border-bottom-color: var(--dbs-blue); }
+.group-column.group-c .group-column-header { border-bottom-color: var(--dbs-green); }
+
+.signatory-card {
+  background: #FFFFFF;
+  border: 1px solid var(--dbs-border);
+  border-radius: var(--radius-md);
+  padding: 13px;
+  box-shadow: var(--shadow-xs);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: all 0.2s ease;
+}
+
+.signatory-card.pending-addition {
+  border-color: #10B981;
+  background: #F0FDF4;
+}
+
+.signatory-card.revoked {
+  opacity: 0.65;
+  background: #FEF2F2;
+  border-color: #FECACA;
+}
+
+.sig-top-line {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sig-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--dbs-text-primary);
+}
+
+.sig-role {
+  font-size: 12px;
+  color: var(--dbs-text-secondary);
+  font-weight: 500;
+}
+
+.sig-meta-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--dbs-text-secondary);
+  background: rgba(241, 245, 249, 0.7);
+  padding: 8px;
+  border-radius: var(--radius-sm);
+}
+
+.sig-actions-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 6px;
+}
+
+/* OCR & Add Signatory Dual Split */
+.stage2-ingestion-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+
+@media (max-width: 920px) {
+  .stage2-ingestion-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ocr-dropzone-card {
+  border: 2px dashed var(--dbs-blue);
+  background: #F0F9FF;
+  border-radius: var(--radius-md);
+  padding: 18px;
+  text-align: center;
+  transition: all 0.2s ease;
+}
+
+.ocr-dropzone-card:hover {
+  background: #E0F2FE;
+  border-color: #0369A1;
+}
+
+.form-grid-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.form-field label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--dbs-text-secondary);
+}
+
+.form-field input, .form-field select, .form-field textarea {
+  padding: 8px 11px;
+  border: 1px solid var(--dbs-border-strong);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-family: var(--font-sans);
+  outline: none;
+}
+
+.form-field input:focus, .form-field select:focus, .form-field textarea:focus {
+  border-color: var(--dbs-red);
+  box-shadow: 0 0 0 2px rgba(204, 0, 0, 0.15);
+}
+
+/* ============================================================================
+   7. Stage 3 — Tiered Signing Rule Builder & Live Transaction Simulator
+   ============================================================================ */
+
+.rules-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 16px;
+}
+
+.rules-table th, .rules-table td {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--dbs-border);
+  text-align: left;
+  font-size: 13px;
+}
+
+.rules-table th {
+  background: #F8FAFC;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--dbs-text-muted);
+  font-weight: 700;
+}
+
+.simulator-panel {
+  background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%);
+  color: #FFFFFF;
+  border-radius: var(--radius-lg);
+  padding: 22px;
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 22px;
+  align-items: center;
+}
+
+@media (max-width: 920px) {
+  .simulator-panel {
+    grid-template-columns: 1fr;
+  }
+}
+
+.sim-slider-input {
+  width: 100%;
+  accent-color: var(--dbs-red);
+  height: 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  margin: 12px 0;
+}
+
+.sim-result-card {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: var(--radius-md);
+  padding: 16px;
+}
+
+.sim-combos-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.sim-combo-item {
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  color: #D1FAE5;
+}
+
+/* ============================================================================
+   8. Stage 4 — Mandate Diff & Board Resolution Pre-Flight Auditor
+   ============================================================================ */
+
+.mandate-diff-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+@media (max-width: 900px) {
+  .mandate-diff-split {
+    grid-template-columns: 1fr;
+  }
+}
+
+.diff-col {
+  border: 1px solid var(--dbs-border);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  background: #F8FAFC;
+}
+
+.diff-col.proposed {
+  background: #F0FDF4;
+  border-color: #86EFAC;
+}
+
+.clause-checklist-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin: 14px 0;
+}
+
+.clause-check-card {
+  padding: 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--dbs-border);
+  background: #FFFFFF;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.clause-check-card.passed {
+  border-color: var(--dbs-green-border);
+  background: var(--dbs-green-bg);
+}
+
+.clause-check-card.failed {
+  border-color: var(--dbs-amber-border);
+  background: var(--dbs-amber-bg);
+}
+
+/* ============================================================================
+   9. Stage 5 — Multi-Party DigiSign Tracker & Immutable Audit Trail
+   ============================================================================ */
+
+.digisign-tracker-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  margin: 14px 0;
+}
+
+.cosigner-card {
+  border: 1px solid var(--dbs-border);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  background: #FFFFFF;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.cosigner-card.signed {
+  border-color: var(--dbs-green-border);
+  background: #F0FDF4;
+}
+
+.audit-log-table-wrap {
+  max-height: 360px;
+  overflow-y: auto;
+  border: 1px solid var(--dbs-border);
+  border-radius: var(--radius-md);
+}
+
+/* ============================================================================
+   10. Right-Hand Synchronized Gemini Live Voice & Chat Copilot Dock
+   ============================================================================ */
+
+.copilot-dock {
+  background: #0F172A;
+  color: #F8FAFC;
+  border-left: 1px solid #1E293B;
+  height: calc(100vh - 102px);
+  position: sticky;
+  top: 102px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.copilot-dock-header {
+  padding: 14px 16px;
+  background: #111827;
+  border-bottom: 1px solid #1E293B;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.copilot-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.copilot-title {
+  font-size: 14px;
+  font-weight: 800;
+  color: #FFFFFF;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Voice Orb & Canvas Waveform Visualizer */
+.voice-studio-deck {
+  padding: 12px 16px;
+  background: linear-gradient(180deg, #162033 0%, #0F172A 100%);
+  border-bottom: 1px solid #1E293B;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.orb-waveform-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+}
+
+.voice-orb-btn {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: 2px solid #EF4444;
+  background: radial-gradient(circle at 30% 30%, #EF4444, #991B1B);
+  color: #FFFFFF;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  box-shadow: 0 0 18px rgba(239, 68, 68, 0.45);
+  transition: all 0.2s ease;
+}
+
+.voice-orb-btn.listening {
+  background: radial-gradient(circle at 30% 30%, #10B981, #047857);
+  border-color: #34D399;
+  box-shadow: 0 0 24px rgba(16, 185, 129, 0.75);
+  animation: orbPulse 1.3s infinite;
+}
+
+.voice-orb-btn.speaking {
+  background: radial-gradient(circle at 30% 30%, #38BDF8, #0284C7);
+  border-color: #7DD3FC;
+  box-shadow: 0 0 24px rgba(56, 189, 248, 0.75);
+}
+
+@keyframes orbPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+}
+
+.waveform-canvas-wrap {
+  flex: 1;
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid #334155;
+  border-radius: var(--radius-md);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+#voiceWaveformCanvas {
+  width: 100%;
+  height: 36px;
+  display: block;
+}
+
+.voice-controls-subrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  font-size: 11px;
+  color: #94A3B8;
+}
+
+.barge-in-btn {
+  background: rgba(239, 68, 68, 0.16);
+  color: #FCA5A5;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: var(--radius-sm);
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.barge-in-btn:hover {
+  background: rgba(239, 68, 68, 0.3);
+  color: #FFFFFF;
+}
+
+/* Suggestion Chips */
+.copilot-chips-strip {
+  padding: 8px 12px;
+  background: #111827;
+  border-bottom: 1px solid #1E293B;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+}
+
+.suggestion-chip {
+  background: #1E293B;
+  color: #CBD5E1;
+  border: 1px solid #334155;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.suggestion-chip:hover {
+  background: var(--dbs-red);
+  color: #FFFFFF;
+  border-color: #EF4444;
+}
+
+/* Chat Stream */
+.copilot-chat-stream {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.chat-msg {
+  padding: 11px 13px;
+  border-radius: var(--radius-md);
+  font-size: 12.5px;
+  line-height: 1.5;
+  max-width: 94%;
+  word-wrap: break-word;
+}
+
+.chat-msg.user {
+  align-self: flex-end;
+  background: var(--dbs-red);
+  color: #FFFFFF;
+  border-bottom-right-radius: 2px;
+}
+
+.chat-msg.assistant {
+  align-self: flex-start;
+  background: #1E293B;
+  color: #F1F5F9;
+  border: 1px solid #334155;
+  border-bottom-left-radius: 2px;
+}
+
+/* Collapsible Extended Thinking Trace Accordion */
+.thinking-trace-box {
+  background: rgba(124, 58, 237, 0.12);
+  border: 1px solid rgba(167, 139, 250, 0.35);
+  border-radius: var(--radius-sm);
+  margin-bottom: 8px;
+  font-size: 11.5px;
+  color: #DDD6FE;
+}
+
+.thinking-trace-box summary {
+  padding: 6px 10px;
+  cursor: pointer;
+  font-weight: 700;
+  color: #C4B5FD;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.thinking-trace-body {
+  padding: 8px 10px;
+  border-top: 1px solid rgba(167, 139, 250, 0.25);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  color: #E9D5FF;
+}
+
+/* Live Tool Execution Card */
+.tool-exec-card {
+  background: rgba(2, 132, 199, 0.14);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+  font-size: 11.5px;
+  color: #E0F2FE;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.tool-exec-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: #38BDF8;
+}
+
+.tool-stage-jump-btn {
+  background: rgba(56, 189, 248, 0.2);
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  color: #7DD3FC;
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 10.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.copilot-input-bar {
+  padding: 12px;
+  background: #111827;
+  border-top: 1px solid #1E293B;
+  display: flex;
+  gap: 8px;
+}
+
+.copilot-input-bar input {
+  flex: 1;
+  background: #1E293B;
+  color: #FFFFFF;
+  border: 1px solid #334155;
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+  font-size: 12.5px;
+  outline: none;
+}
+
+.copilot-input-bar input:focus {
+  border-color: var(--dbs-red);
+}
+
+/* Toast Notification Container */
+.toast-container {
+  position: fixed;
+  bottom: 20px;
+  left: 24px;
+  z-index: 999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.toast-item {
+  background: #111827;
+  color: #FFFFFF;
+  border-left: 4px solid var(--dbs-red);
+  padding: 11px 16px;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  font-size: 12.5px;
+  max-width: 380px;
+  animation: fadeSlideIn 0.2s ease;
+}
+
+.toast-item.success { border-left-color: #10B981; }
+.toast-item.error { border-left-color: #EF4444; }
+.toast-item.info { border-left-color: #38BDF8; }
