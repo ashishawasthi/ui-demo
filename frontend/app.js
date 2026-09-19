@@ -1581,7 +1581,7 @@
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     let phase = 0;
-    const googleColors = ['#4285F4', '#EA4335', '#FBBC05', '#34A853'];
+    const googleColors = ['#E31837', '#C8102E', '#059669', '#1A1D21'];
 
     function draw() {
       const w = canvas.width;

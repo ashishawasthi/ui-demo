@@ -4,20 +4,21 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DBS IDEAL × DBS Joy — Corporate Mandate &amp; Signatory Governance</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260919_v5" />
-  <link rel="stylesheet" href="styles.css?v=20260919_v5" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260919_v6_dbs" />
+  <link rel="stylesheet" href="styles.css?v=20260919_v6_dbs" />
   <style>
-    /* Enforce crisp Google Material 3 Light Theme & prevent any cached dark styles */
-    html, body { background-color: #F8FAFC !important; color: #0F172A !important; }
-    .global-header { background: #FFFFFF !important; color: #0F172A !important; border-bottom: 1px solid #E2E8F0 !important; height: 60px !important; }
-    .copilot-dock, .copilot-dock-header, .copilot-input-bar { background: #FFFFFF !important; color: #0F172A !important; border-color: #E2E8F0 !important; }
-    .voice-studio-deck { background: #F8FAFC !important; color: #0F172A !important; border-bottom: 1px solid #E2E8F0 !important; }
-    .copilot-chat-stream { background: #FFFFFF !important; color: #0F172A !important; }
-    .simulator-panel { background: #F8FAFC !important; color: #0F172A !important; border: 1px solid #E2E8F0 !important; }
-    .chat-msg.assistant { background: #F8FAFC !important; color: #0F172A !important; border: 1px solid #E2E8F0 !important; }
-    .chat-msg.user { background: #1A73E8 !important; color: #FFFFFF !important; }
+    /* Official DBS Bank Singapore Light Theme (dbs.com.sg) */
+    html, body { background-color: #F6F7F9 !important; color: #1A1D21 !important; }
+    .global-header { background: #FFFFFF !important; color: #1A1D21 !important; border-bottom: 1px solid #E5E7EB !important; height: 60px !important; }
+    .copilot-dock, .copilot-dock-header, .copilot-input-bar { background: #FFFFFF !important; color: #1A1D21 !important; border-color: #E5E7EB !important; }
+    .copilot-dock-header { border-bottom: 2px solid #E31837 !important; }
+    .voice-studio-deck { background: #FFFBFB !important; color: #1A1D21 !important; border-bottom: 1px solid #E5E7EB !important; }
+    .copilot-chat-stream { background: #F6F7F9 !important; color: #1A1D21 !important; }
+    .simulator-panel { background: #F6F7F9 !important; color: #1A1D21 !important; border: 1px solid #E5E7EB !important; }
+    .chat-msg.assistant { background: #FFFFFF !important; color: #1A1D21 !important; border: 1px solid #E5E7EB !important; }
+    .chat-msg.user { background: #E31837 !important; color: #FFFFFF !important; }
 
-    /* Compact Single-Row BRD 4-Dimension Ribbon (Fits 100% on 1 line, keeping accounts above the fold) */
+    /* Compact Single-Row BRD 4-Dimension Ribbon */
     .brd-dimensions-bar {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
@@ -26,28 +27,28 @@
     }
     .brd-dim-card {
       background: #FFFFFF;
-      border: 1px solid #E2E8F0;
+      border: 1px solid #E5E7EB;
       border-radius: 8px;
       padding: 8px 12px;
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 8px;
-      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.02);
+      box-shadow: 0 1px 2px rgba(26, 29, 33, 0.02);
       white-space: nowrap;
       overflow: hidden;
     }
     .brd-dim-label {
       font-size: 11px;
       font-weight: 600;
-      color: #64748B;
+      color: #6B7280;
       text-transform: uppercase;
       letter-spacing: 0.02em;
     }
     .brd-toggle-pill {
-      background: #E8F0FE;
-      border: 1px solid #D2E3FC;
-      color: #174EA6;
+      background: #FFF1F2;
+      border: 1px solid #FECDD3;
+      color: #9F1239;
       border-radius: 6px;
       padding: 2px 8px;
       font-size: 11px;
@@ -55,11 +56,10 @@
       cursor: pointer;
       white-space: nowrap;
     }
-    /* Clean collapsible drawer for manual forms so Stage 2 & Stage 3 stay uncluttered */
     .clean-drawer {
-      border: 1px solid #E2E8F0;
+      border: 1px solid #E5E7EB;
       border-radius: 10px;
-      background: #F8FAFC;
+      background: #F6F7F9;
       margin-top: 14px;
       overflow: hidden;
     }
@@ -67,7 +67,7 @@
       padding: 11px 16px;
       font-size: 13px;
       font-weight: 600;
-      color: #1A73E8;
+      color: #E31837;
       cursor: pointer;
       list-style: none;
       display: flex;
@@ -76,27 +76,27 @@
       background: #FFFFFF;
     }
     .clean-drawer summary:hover {
-      background: #F8FAFC;
+      background: #FFFBFB;
     }
     .clean-drawer-body {
       padding: 16px;
-      border-top: 1px solid #E2E8F0;
+      border-top: 1px solid #E5E7EB;
     }
   </style>
 </head>
 <body>
   <!-- ========================================================================
-       1. MINIMALIST EXECUTIVE BANKING NAVIGATION BAR (Zero Backend Clutter)
+       1. OFFICIAL DBS BANK SINGAPORE LIGHT NAVIGATION BAR
        ======================================================================== -->
   <header class="global-header" id="globalHeader">
     <div class="header-top-row">
-      <!-- Left: Institutional Brand & Service Breadcrumb -->
+      <!-- Left: Official DBS Spark Emblem & DBS IDEAL Wordmark -->
       <div class="brand-cluster">
         <div class="dbs-logo-spark" aria-hidden="true"></div>
         <div class="brand-wordmark">
-          <span>DBS IDEAL</span>
-          <span class="divider">/</span>
-          <span class="page-context">Change of Account Mandate (Smart Apply)</span>
+          <span>DBS <span class="ideal-accent">IDEAL</span></span>
+          <span class="divider">|</span>
+          <span class="page-context">Corporate &amp; SME Banking &middot; Change of Account Mandate</span>
         </div>
       </div>
 
@@ -616,12 +616,12 @@
     </main>
 
     <!-- ======================================================================
-         RIGHT SIDEBAR: DBS JOY × GEMINI LIVE ADVISOR (Minimalist Light Concierge)
+         RIGHT SIDEBAR: DBS JOY × GEMINI LIVE ADVISOR (Official DBS Light Theme)
          ====================================================================== -->
     <aside class="copilot-dock" id="geminiCopilotDock" aria-label="DBS Joy Voice and Mandate Concierge">
       <div class="copilot-dock-header">
         <div class="copilot-title">
-          <span style="color:var(--google-blue); font-size:16px;">&#x2726;</span>
+          <span class="joy-spark-badge">J</span>
           <span>DBS Joy &middot; Mandate Concierge</span>
         </div>
         <span class="badge badge-green">Live Sync</span>
