@@ -96,16 +96,18 @@
   function showToast(title, message, severity = 'info') {
     const container = document.getElementById('toastContainer');
     if (!container) return;
+    // Never stack multiple toasts on screen — replace any existing toast cleanly
+    container.innerHTML = '';
     const toast = document.createElement('div');
     toast.className = `toast-item ${severity}`;
     toast.innerHTML = `
-      <div style="font-weight:700; color:var(--ink-primary); margin-bottom:2px;">${escapeHtml(title)}</div>
-      <div style="color:var(--ink-secondary); font-size:12px;">${escapeHtml(message)}</div>
+      <div style="font-weight:700; color:var(--text-primary); margin-bottom:2px;">${escapeHtml(title)}</div>
+      <div style="color:var(--text-secondary); font-size:12px;">${escapeHtml(message)}</div>
     `;
     container.appendChild(toast);
     setTimeout(() => {
       if (toast.parentNode) toast.parentNode.removeChild(toast);
-    }, 4000);
+    }, 2800);
   }
 
   function flashElement(elementOrId) {
@@ -114,7 +116,6 @@
     el.classList.remove('flash-highlight');
     void el.offsetWidth; // trigger reflow
     el.classList.add('flash-highlight');
-    el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
   async function apiFetch(path, options = {}) {
@@ -164,7 +165,9 @@
       flashElement(`stagePanel${target}`);
     }
 
-    if (target === 3 && !state.lastSimulationResult && state.activeCustomerId) {
+    // Only run initial simulation if user navigated directly (never from a WebSocket ui_sync broadcast)
+    if (target === 3 && !options.fromUiSync && !state.lastSimulationResult && state.activeCustomerId) {
+      state.lastSimulationResult = { pending: true };
       runTransactionSimulation();
     }
   }
@@ -1393,7 +1396,7 @@
     }
 
     if (targetStage) {
-      navigateToStage(targetStage, { flash: true });
+      navigateToStage(targetStage, { flash: true, fromUiSync: true });
     }
 
     if (highlightId) {
