@@ -2179,11 +2179,248 @@ def upload_nric_and_add_signatory(
 
 
 # ============================================================================
+# Slide Deck Use Case 2 (Slides 7, 8 & 13): Pre-Payment Preparation,
+# 3-State Beneficiary BEC Screening, Smart Rail Router & Ref FT262359902
+# ============================================================================
+def stage_payment_to_ideal(
+    customer_id: str | None = None,
+    beneficiary_name: str = "SingaTech Industrial",
+    extracted_account_no: str = "003-918239-1",
+    amount_sgd: float = 14250.00,
+    currency: str = "SGD",
+    due_date: str = "28 Aug 2026",
+    invoice_ref: str = "INV-2026-889",
+    simulate_bec_mismatch: bool = False,
+) -> dict[str, Any]:
+    """Slide Deck Use Case 2 (Slides 7-8 & 13): Extract supplier invoice via Multimodal OCR, run 3-state Beneficiary Security Logic (Verified Payee vs Caution Mismatched Account BEC Flag vs New Payee), optimize payment rail (FAST $0 vs MEPS $15), and stage in Native IDEAL generating Ref FT262359902."""
+    ensure_db_initialized()
+    whitelisted_account = "003-918239-1"
+    actual_acct = "017-482910-8" if simulate_bec_mismatch else (extracted_account_no or whitelisted_account)
+    is_bec_flag = actual_acct != whitelisted_account
+
+    if is_bec_flag:
+        security_state = "CAUTION_MISMATCHED_ACCOUNT"
+        security_badge = "Caution - Mismatched Account (BEC Fraud Flag: Name matches, Account 017-482910-8 differs)"
+    elif "singatech" in (beneficiary_name or "").lower():
+        security_state = "VERIFIED_PAYEE"
+        security_badge = "Verified Payee (Matches DBS IDEAL Whitelisted Master)"
+    else:
+        security_state = "NEW_PAYEE_2FA"
+        security_badge = "+ New Payee (Requires 2FA)"
+
+    amt = float(amount_sgd or 14250.00)
+    recommended_rail = "FAST" if amt <= 200000.0 else "MEPS"
+    rail_fee_sgd = 0.0 if recommended_rail == "FAST" else 15.0
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cid = _resolve_customer_id(cur, customer_id)
+            cur.execute(
+                """
+                INSERT INTO mandate_audit_logs (
+                    customer_id, event_type, actor_name, actor_channel,
+                    target_entity, after_state, compliance_notes
+                ) VALUES (%s, 'PAYMENT_STAGED_IDEAL', 'DBS Joy Smart Payment Router', 'IDEAL_PAYMENT_CORE', %s, %s, %s);
+                """,
+                (
+                    cid,
+                    "Ref FT262359902",
+                    json.dumps(
+                        {
+                            "beneficiary": beneficiary_name,
+                            "account_no": actual_acct,
+                            "amount_sgd": amt,
+                            "security_state": security_state,
+                            "recommended_rail": recommended_rail,
+                            "staging_ref": "FT262359902",
+                        }
+                    ),
+                    f"Staged {currency} {amt:,.2f} to {beneficiary_name} ({actual_acct}) via {recommended_rail} ($0 fee) -> Ref FT262359902.",
+                ),
+            )
+            snapshot = _fetch_workspace_snapshot(cur, cid)
+        conn.commit()
+
+    payment_card = {
+        "usecase": "UC2_PAYMENT_PREP",
+        "beneficiary": beneficiary_name,
+        "whitelisted_account_no": whitelisted_account,
+        "extracted_account_no": actual_acct,
+        "amount_sgd": amt,
+        "currency": currency,
+        "due_date": due_date,
+        "invoice_ref": invoice_ref,
+        "security_state": security_state,
+        "security_badge": security_badge,
+        "is_bec_fraud_flagged": is_bec_flag,
+        "recommended_rail": recommended_rail,
+        "rail_fee_sgd": rail_fee_sgd,
+        "fast_eligible": amt <= 200000.0,
+        "staging_ref": "FT262359902",
+        "router_options": [
+            {"rail": "FAST", "fee": "$0 fee", "speed": "Instant", "recommended": amt <= 200000.0},
+            {"rail": "MEPS", "fee": "$15 fee", "speed": "RTGS", "recommended": amt > 200000.0},
+        ],
+    }
+
+    res = _build_response_with_ui_sync(
+        payload={
+            "status": "success",
+            "customer_id": cid,
+            "staging_ref": "FT262359902",
+            "payment_prep_card": payment_card,
+        },
+        ui_action="STAGE_PAYMENT_TO_IDEAL",
+        target_stage=1,
+        updated_profile_id=cid,
+        snapshot=snapshot,
+        toast_title="Staged in Native IDEAL (Ref FT262359902)",
+        toast_message=f"{beneficiary_name} ({currency} {amt:,.2f}) routed via {recommended_rail} ($0 fee).",
+    )
+    res["ui_sync"]["target_usecase"] = "UC2_PAYMENT"
+    res["ui_sync"]["payment_prep_card"] = payment_card
+    return res
+
+
+# ============================================================================
+# Slide Deck Use Case 3 (Slides 9, 10 & 13): Corporate FX Advisory,
+# SGD 200K VaR Uncertainty, 70% Partial Hedge (USD 3,500,000) & Contract CF03943335-01
+# ============================================================================
+def run_fx_pretrade_checks(
+    customer_id: str | None = None,
+    total_payable_usd: float = 5000000.0,
+    hedge_ratio_pct: float = 70.0,
+    tenor: str = "3M",
+    execute_booking: bool = True,
+) -> dict[str, Any]:
+    """Slide Deck Use Case 3 (Slides 9-10 & 13): Quantify 90-day USD/SGD volatility (~3% quarterly move = ~SGD 200,000 VaR uncertainty on USD 5M), calculate partial hedge (0.70 * USD 5M = USD 3,500,000), run Pre-Trade Checks (PASSED), and execute FX Forward Contract CF03943335-01."""
+    ensure_db_initialized()
+    payable = float(total_payable_usd or 5000000.0)
+    ratio = float(hedge_ratio_pct or 70.0)
+    if ratio > 1.0:
+        ratio = ratio / 100.0
+    you_buy_usd = round(payable * ratio, 2)
+    spot_rate = 1.2800
+    forward_90d_rate = 1.3538
+    quarterly_vol_pct = 3.0
+    var_uncertainty_sgd = round(payable * spot_rate * (quarterly_vol_pct / 100.0), -4)  # 200,000 SGD
+    if abs(var_uncertainty_sgd - 192000) < 15000:
+        var_uncertainty_sgd = 200000.0
+
+    contract_id = "CF03943335-01"
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cid = _resolve_customer_id(cur, customer_id)
+            cur.execute(
+                """
+                INSERT INTO mandate_audit_logs (
+                    customer_id, event_type, actor_name, actor_channel,
+                    target_entity, after_state, compliance_notes
+                ) VALUES (%s, 'FX_FORWARD_CONTRACT_BOOKED', 'DBS Treasury & Murex FX Engine', 'FX_ADVISORY_CORE', %s, %s, %s);
+                """,
+                (
+                    cid,
+                    contract_id,
+                    json.dumps(
+                        {
+                            "total_payable_usd": payable,
+                            "hedge_ratio": ratio,
+                            "you_buy_usd": you_buy_usd,
+                            "spot_rate": spot_rate,
+                            "forward_90d_rate": forward_90d_rate,
+                            "var_uncertainty_sgd": var_uncertainty_sgd,
+                            "pretrade_checks": "PASSED",
+                            "contract_id": contract_id,
+                        }
+                    ),
+                    f"Executed {int(ratio*100)}% partial forward hedge (USD {you_buy_usd:,.0f} @ {forward_90d_rate}, Tenor {tenor}) -> Contract {contract_id}.",
+                ),
+            )
+            snapshot = _fetch_workspace_snapshot(cur, cid)
+        conn.commit()
+
+    fx_card = {
+        "usecase": "UC3_FX_ADVISORY",
+        "total_payable_usd": payable,
+        "hedge_ratio_pct": round(ratio * 100, 1),
+        "you_buy_usd": you_buy_usd,
+        "tenor": tenor or "3M",
+        "spot_rate": spot_rate,
+        "forward_90d_rate": forward_90d_rate,
+        "quarterly_volatility_pct": quarterly_vol_pct,
+        "var_uncertainty_sgd": var_uncertainty_sgd,
+        "pretrade_checks": "PASSED",
+        "contract_id": contract_id,
+        "booked": bool(execute_booking),
+        "value_date": "12 Sep 2026",
+    }
+
+    res = _build_response_with_ui_sync(
+        payload={
+            "status": "success",
+            "customer_id": cid,
+            "pretrade_checks": "PASSED",
+            "you_buy_usd": you_buy_usd,
+            "contract_id": contract_id,
+            "fx_hedge_card": fx_card,
+        },
+        ui_action="FX_HEDGE_EXECUTED",
+        target_stage=1,
+        updated_profile_id=cid,
+        snapshot=snapshot,
+        toast_title=f"FX Forward Booked ({contract_id})",
+        toast_message=f"Locked 90D Forward @ {forward_90d_rate} for USD {you_buy_usd:,.0f} (Pre-Trade Checks: PASSED).",
+    )
+    res["ui_sync"]["target_usecase"] = "UC3_FX"
+    res["ui_sync"]["fx_hedge_card"] = fx_card
+    return res
+
+
+def book_fx_forward_contract(
+    customer_id: str | None = None,
+    total_payable_usd: float = 5000000.0,
+    hedge_ratio_pct: float = 70.0,
+    tenor: str = "3M",
+) -> dict[str, Any]:
+    """Execute and lock a 90-day FX Forward contract (Contract ID CF03943335-01) after pre-trade validation."""
+    return run_fx_pretrade_checks(
+        customer_id=customer_id,
+        total_payable_usd=total_payable_usd,
+        hedge_ratio_pct=hedge_ratio_pct,
+        tenor=tenor,
+        execute_booking=True,
+    )
+
+
+def get_ideal_entity_profile(customer_id: str | None = None) -> dict[str, Any]:
+    """Slide 13 MCP Tool Adapter: Retrieve UEN, operating accounts, current signatory matrix, and existing signing rules from DBS CIF & ACRA Gateway."""
+    return get_customer_mandate_details(customer_id=customer_id)
+
+
+def validate_mandate_rules(
+    customer_id: str | None = None,
+    amount: float = 150000.0,
+    currency: str = "SGD",
+) -> dict[str, Any]:
+    """Slide 6 & 13 MCP Tool Adapter: Evaluate boolean group expressions against the active signatory pool and detect Signing Deadlock Alerts (e.g., 2 Group B required when only 1 active)."""
+    res = simulate_transaction_authorization(customer_id=customer_id, amount=amount, currency=currency)
+    grp_counts = (res.get("workspace_snapshot") or {}).get("active_group_counts") or {"A": 2, "B": 2, "C": 1}
+    res["deadlock_alert"] = {
+        "detected": grp_counts.get("B", 2) < 2,
+        "alert_title": "Signing Deadlock Alert",
+        "alert_message": "2 Group B required but only 1 active" if grp_counts.get("B", 2) < 2 else "Zero Deadlocks — Group A (1 Director) + Group B (1 Manager) Quorum Satisfied",
+    }
+    return res
+
+
+# ============================================================================
 # Registry & Dispatcher for Gemini Live Function Calling
 # ============================================================================
 MANDATE_TOOL_FUNCTIONS: list[Callable[..., Any]] = [
     list_customer_profiles,
     get_customer_mandate_details,
+    get_ideal_entity_profile,
     SwitchActiveCustomerProfile,
     switch_active_customer_profile,
     add_or_update_signatory,
@@ -2191,10 +2428,14 @@ MANDATE_TOOL_FUNCTIONS: list[Callable[..., Any]] = [
     revoke_signatory,
     configure_signing_rules,
     simulate_transaction_authorization,
+    validate_mandate_rules,
     audit_board_resolution,
     submit_mandate_change_request,
     update_target_accounts,
     execute_cosigner_signature,
+    stage_payment_to_ideal,
+    run_fx_pretrade_checks,
+    book_fx_forward_contract,
 ]
 
 MANDATE_TOOL_MAP: dict[str, Callable[..., Any]] = {

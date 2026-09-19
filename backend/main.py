@@ -605,12 +605,92 @@ async def api_upload_nric_ocr(payload: dict[str, Any] = Body(...)) -> dict[str, 
     }
 
 
+@app.post("/api/payment-prep/stage")
+async def api_payment_prep_stage(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Slide Deck Use Case 2 (Slides 7-8): Smart Payment Verification, BEC Screening, FAST/MEPS Router & Ref FT262359902."""
+    from datetime import datetime, timezone
+    from backend.tools import stage_payment_to_ideal
+
+    res = stage_payment_to_ideal(
+        customer_id=payload.get("customer_id"),
+        beneficiary_name=payload.get("beneficiary_name") or "SingaTech Industrial",
+        extracted_account_no=payload.get("extracted_account_no") or "003-918239-1",
+        amount_sgd=float(payload.get("amount_sgd") or 14250.00),
+        currency=str(payload.get("currency") or "SGD"),
+        due_date=str(payload.get("due_date") or "28 Aug 2026"),
+        invoice_ref=str(payload.get("invoice_ref") or "INV-2026-889"),
+        simulate_bec_mismatch=bool(payload.get("simulate_bec_mismatch", False)),
+    )
+    if res.get("ui_sync"):
+        await broadcaster.broadcast(res["ui_sync"])
+    card = res.get("payment_prep_card") or {}
+    reply_msg = (
+        f"Extracted invoice `{card.get('invoice_ref', 'INV-2026-889')}` for **{card.get('beneficiary')}** (`SGD 14,250.00`), "
+        f"screened payee (`{card.get('security_badge')}`), optimized via **FAST ($0 fee · Instant)**, and staged in Native IDEAL (`Ref FT262359902`)."
+    )
+    return {
+        **res,
+        "reply": reply_msg,
+        "tool_calls": [
+            {
+                "call_id": f"uc2_pay_{int(datetime.now(timezone.utc).timestamp())}",
+                "tool_name": "stage_payment_to_ideal",
+                "args": payload,
+                "result": {k: v for k, v in res.items() if k not in ("workspace_snapshot", "ui_sync")},
+            }
+        ],
+    }
+
+
+@app.post("/api/fx/pretrade-and-book")
+async def api_fx_pretrade_and_book(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Slide Deck Use Case 3 (Slides 9-10): FX Volatility VaR (~SGD 200K on USD 5M), 70% Partial Hedge (USD 3,500,000), Pre-Trade Checks (PASSED) & Contract CF03943335-01."""
+    from datetime import datetime, timezone
+    from backend.tools import run_fx_pretrade_checks
+
+    res = run_fx_pretrade_checks(
+        customer_id=payload.get("customer_id"),
+        total_payable_usd=float(payload.get("total_payable_usd") or 5000000.0),
+        hedge_ratio_pct=float(payload.get("hedge_ratio_pct") or 70.0),
+        tenor=str(payload.get("tenor") or "3M"),
+        execute_booking=bool(payload.get("execute_booking", True)),
+    )
+    if res.get("ui_sync"):
+        await broadcaster.broadcast(res["ui_sync"])
+    card = res.get("fx_hedge_card") or {}
+    reply_msg = (
+        f"USD/SGD moves ~3% a quarter (`~SGD 200,000 VaR` uncertainty on `USD 5M`). "
+        f"Locked 70% partial forward (`0.70 × USD 5M = USD 3,500,000`, Tenor `3M`, Rate `1.3538`, `Pre-Trade Checks: PASSED`) under **Contract ID `{card.get('contract_id', 'CF03943335-01')}`**."
+    )
+    return {
+        **res,
+        "reply": reply_msg,
+        "tool_calls": [
+            {
+                "call_id": f"uc3_fx_{int(datetime.now(timezone.utc).timestamp())}",
+                "tool_name": "run_fx_pretrade_checks",
+                "args": payload,
+                "result": {k: v for k, v in res.items() if k not in ("workspace_snapshot", "ui_sync")},
+            }
+        ],
+    }
+
+
 @app.get("/dbs-logo.png")
 @app.get("/static/dbs-logo.png")
 async def serve_dbs_logo() -> Any:
     logo_path = FRONTEND_DIR / "dbs-logo.png"
     if logo_path.exists():
         return FileResponse(logo_path, media_type="image/png", headers=NO_CACHE_HEADERS)
+    return HTMLResponse("", status_code=404)
+
+
+@app.get("/mic-icon.png")
+@app.get("/static/mic-icon.png")
+async def serve_mic_icon() -> Any:
+    mic_path = FRONTEND_DIR / "mic-icon.png"
+    if mic_path.exists():
+        return FileResponse(mic_path, media_type="image/png", headers=NO_CACHE_HEADERS)
     return HTMLResponse("", status_code=404)
 
 

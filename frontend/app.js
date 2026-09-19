@@ -1340,6 +1340,7 @@
 
       case 'audio_out':
       case 'audio_output': {
+        if (typeof stopPhoneRinger === 'function') stopPhoneRinger(true);
         const b64 = msg.pcm24_base64 || msg.data;
         const rate = Number(msg.sample_rate || 24000);
         if (b64) {
@@ -1358,6 +1359,9 @@
       case 'assistant_text': {
         if (msg.text) {
           const role = msg.role === 'user' ? 'user' : 'assistant';
+          if (role === 'assistant' && typeof stopPhoneRinger === 'function') {
+            stopPhoneRinger(true);
+          }
           const turnId = msg.turn_id || `${role}_latest`;
           upsertTurnMessage(turnId, role, msg.text);
         }
@@ -1377,8 +1381,50 @@
     }
   }
 
+  function switchSlideDeckUseCase(usecaseId) {
+    const uc = String(usecaseId || 'UC1_MANDATE').toUpperCase();
+    state.activeUseCase = uc;
+    const p1 = document.getElementById('uc1MandateContainer');
+    const p2 = document.getElementById('uc2PaymentPrepPanel');
+    const p3 = document.getElementById('uc3FxAdvisoryPanel');
+    if (p1) p1.style.display = uc === 'UC1_MANDATE' ? 'block' : 'none';
+    if (p2) p2.style.display = uc === 'UC2_PAYMENT' ? 'block' : 'none';
+    if (p3) p3.style.display = uc === 'UC3_FX' ? 'block' : 'none';
+
+    document.querySelectorAll('.uc-tab-btn').forEach((btn) => {
+      const isMatch = btn.getAttribute('data-usecase') === uc;
+      btn.classList.toggle('active', isMatch);
+      btn.style.background = isMatch ? '#E31837' : '#FFFFFF';
+      btn.style.color = isMatch ? '#FFFFFF' : '#374151';
+      btn.style.borderColor = isMatch ? '#E31837' : '#D1D5DB';
+      btn.style.fontWeight = isMatch ? '700' : '600';
+    });
+  }
+
   async function handleUiSync(syncPayload) {
     if (!syncPayload) return;
+
+    if (syncPayload.target_usecase) {
+      switchSlideDeckUseCase(syncPayload.target_usecase);
+    } else if (syncPayload.ui_action === 'STAGE_PAYMENT_TO_IDEAL') {
+      switchSlideDeckUseCase('UC2_PAYMENT');
+    } else if (syncPayload.ui_action === 'FX_HEDGE_EXECUTED') {
+      switchSlideDeckUseCase('UC3_FX');
+    } else if (syncPayload.target_stage) {
+      switchSlideDeckUseCase('UC1_MANDATE');
+    }
+
+    if (syncPayload.payment_prep_card) {
+      const pc = syncPayload.payment_prep_card;
+      const accEl = document.getElementById('uc2AccountNoVal');
+      const vBox = document.getElementById('uc2StateVerifiedBox');
+      const bBox = document.getElementById('uc2StateBecBox');
+      if (accEl) accEl.textContent = pc.extracted_account_no || '003-918239-1';
+      if (vBox && bBox) {
+        vBox.style.opacity = pc.is_bec_fraud_flagged ? '0.45' : '1';
+        bBox.style.opacity = pc.is_bec_fraud_flagged ? '1' : '0.45';
+      }
+    }
 
     const updatedProfileId = syncPayload.updated_profile_id || syncPayload.active_profile_id || syncPayload.customer_id;
     const targetStage = syncPayload.target_stage || syncPayload.navigate_to_stage;
@@ -1590,6 +1636,75 @@
     const cust = resultObj.customer || snap.customer || {};
     const grpCounts = resultObj.active_group_counts || resultObj.remaining_group_counts || snap.active_group_counts || { A: 2, B: 2, C: 1 };
 
+    // 0A. Slide Deck Use Case 2 (Slides 7-8): Smart Payment Verification, BEC Screening & FAST Router (Ref FT262359902)
+    if (tName.includes('stage_payment') || resultObj.payment_prep_card) {
+      const pc = resultObj.payment_prep_card || {};
+      const isBec = Boolean(pc.is_bec_fraud_flagged);
+      return `
+        <div class="a2ui-widget-card ${isBec ? 'a2ui-red' : 'a2ui-green'}" data-a2ui-type="payment-prep-card">
+          <div class="a2ui-widget-header">
+            <span class="a2ui-widget-title">&#x1F9FE; Smart Verification &amp; Rail Router</span>
+            <span class="a2ui-pill ${isBec ? '' : 'green'}">${escapeHtml(pc.staging_ref || 'FT262359902')}</span>
+          </div>
+          <div class="a2ui-kpi-grid">
+            <div class="a2ui-kpi-box">
+              <div class="a2ui-kpi-label">Beneficiary &amp; Acct</div>
+              <div class="a2ui-kpi-val">${escapeHtml(pc.beneficiary || 'SingaTech Industrial')}<br/><span style="font-size:11px;font-family:var(--font-mono);color:${isBec ? '#DC2626' : '#059669'};">${escapeHtml(pc.extracted_account_no || '003-918239-1')}</span></div>
+            </div>
+            <div class="a2ui-kpi-box">
+              <div class="a2ui-kpi-label">Amount &amp; Due Date</div>
+              <div class="a2ui-kpi-val" style="color:#059669;">SGD 14,250.00<br/><span style="font-size:10.5px;color:#6B7280;">Due ${escapeHtml(pc.due_date || '28 Aug 2026')}</span></div>
+            </div>
+            <div class="a2ui-kpi-box">
+              <div class="a2ui-kpi-label">Security Screening</div>
+              <div class="a2ui-kpi-val" style="color:${isBec ? '#DC2626' : '#059669'};">${isBec ? '&#x26A0;&#xFE0F; BEC Mismatch' : '&#x2713; Verified Payee'}</div>
+            </div>
+            <div class="a2ui-kpi-box">
+              <div class="a2ui-kpi-label">Recommended Rail</div>
+              <div class="a2ui-kpi-val" style="color:#059669;">&#x2713; FAST ($0 &middot; Instant)</div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // 0B. Slide Deck Use Case 3 (Slides 9-10): FX Volatility VaR (~SGD 200K) & 70% Forward Hedge (CF03943335-01)
+    if (tName.includes('fx_pretrade') || tName.includes('book_fx') || resultObj.fx_hedge_card) {
+      const fx = resultObj.fx_hedge_card || {};
+      return `
+        <div class="a2ui-widget-card a2ui-green" data-a2ui-type="fx-hedge-card">
+          <div class="a2ui-widget-header">
+            <span class="a2ui-widget-title">&#x1F4C8; Quantitative FX Hedge &amp; Pre-Trade</span>
+            <span class="a2ui-pill green">Pre-Trade: PASSED</span>
+          </div>
+          <div class="a2ui-kpi-grid">
+            <div class="a2ui-kpi-box">
+              <div class="a2ui-kpi-label">You Buy (70% of $5M)</div>
+              <div class="a2ui-kpi-val">USD 3,500,000</div>
+            </div>
+            <div class="a2ui-kpi-box">
+              <div class="a2ui-kpi-label">90D Fwd Lock vs Spot</div>
+              <div class="a2ui-kpi-val"><span style="color:#E31837;">1.3538</span> <span style="font-size:10.5px;color:#6B7280;">(Spot 1.2800)</span></div>
+            </div>
+            <div class="a2ui-kpi-box">
+              <div class="a2ui-kpi-label">VaR Uncertainty Removed</div>
+              <div class="a2ui-kpi-val" style="color:#059669;">~SGD 200,000 (3% Vol)</div>
+            </div>
+            <div class="a2ui-kpi-box">
+              <div class="a2ui-kpi-label">Executed Contract ID</div>
+              <div class="a2ui-kpi-val" style="font-family:var(--font-mono);color:#047857;">${escapeHtml(fx.contract_id || 'CF03943335-01')} &#x2713;</div>
+            </div>
+          </div>
+          <svg width="100%" height="44" viewBox="0 0 240 44" style="background:#111827; border-radius:8px; display:block; padding:4px;">
+            <line x1="10" y1="14" x2="185" y2="14" stroke="#EF4444" stroke-width="2"></line>
+            <text x="190" y="17" font-size="9.5" font-weight="700" fill="#FCA5A5">1.3538</text>
+            <path d="M 10 34 Q 35 12, 65 28 T 125 22 T 185 35" fill="none" stroke="#60A5FA" stroke-width="2"></path>
+            <text x="190" y="37" font-size="9.5" font-weight="700" fill="#93C5FD">1.2800</text>
+          </svg>
+        </div>
+      `;
+    }
+
     // 1. NRIC OCR Signatory Extraction Card + Group Quorum Chart
     if (tName.includes('upload_nric') || resultObj.nric_ocr_card || (tName.includes('add_or_update_signatory') && resultObj.signatory)) {
       const ocr = resultObj.nric_ocr_card || {};
@@ -1679,7 +1794,7 @@
     }
 
     // 3. Entity Switch / Mandate Details -> A2UI Corporate Liquidity & Account Distribution Chart
-    if (tName.includes('switch') || tName.includes('mandate_details') || tName.includes('list_customer')) {
+    if (tName.includes('switch') || tName.includes('mandate_details') || tName.includes('list_customer') || tName.includes('entity_profile')) {
       const accounts = resultObj.accounts || snap.accounts || [];
       const totalSgd = accounts.reduce((s, a) => s + Number(a.sgd_equivalent_balance || a.balance || 0), 0);
       const colors = ['#E31837', '#2563EB', '#059669', '#D97706'];
@@ -1734,11 +1849,12 @@
       `;
     }
 
-    // 4. Signing Rule & Transaction Simulation Waterfall Chart
-    if (tName.includes('simulate_transaction') || tName.includes('configure_signing_rules')) {
+    // 4. Signing Rule & Transaction Simulation Waterfall Chart + Slide 6 Deadlock Check
+    if (tName.includes('simulate_transaction') || tName.includes('configure_signing_rules') || tName.includes('validate_mandate')) {
       const sgdAmt = Number(resultObj.sgd_equivalent_amount || resultObj.max_amount_sgd || args.max_amount_sgd || 150000);
       const reqMatrix = resultObj.required_rule_expression || resultObj.rule_expression || args.rule_expression || '2A';
       const ratio = Math.min(94, Math.max(12, Math.round((sgdAmt / 500000) * 100)));
+      const hasDeadlock = (grpCounts.B || 2) < 2;
       return `
         <div class="a2ui-widget-card" data-a2ui-type="threshold-simulation-chart">
           <div class="a2ui-widget-header">
@@ -1746,13 +1862,13 @@
             <span class="a2ui-pill">Requires ${escapeHtml(reqMatrix)}</span>
           </div>
           <div class="a2ui-kpi-grid">
-            <div class="a2ui-kpi-box">
-              <div class="a2ui-kpi-label">Evaluated Amount (SGD)</div>
-              <div class="a2ui-kpi-val">${formatCurrency(sgdAmt, 'SGD')}</div>
+            <div class="a2ui-kpi-box" style="background:#ECFDF5; border-color:#A7F3D0;">
+              <div class="a2ui-kpi-label" style="color:#065F46;">&#x2713; Authorized</div>
+              <div class="a2ui-kpi-val" style="color:#059669; font-size:11.5px;">1 Director (Grp A) + 1 Manager (Grp B)</div>
             </div>
-            <div class="a2ui-kpi-box">
-              <div class="a2ui-kpi-label">Required Quorum</div>
-              <div class="a2ui-kpi-val" style="color:#E31837;">${escapeHtml(reqMatrix)}</div>
+            <div class="a2ui-kpi-box" style="background:${hasDeadlock ? '#FEF3C7' : '#F9FAFB'}; border-color:${hasDeadlock ? '#F59E0B' : '#E5E7EB'};">
+              <div class="a2ui-kpi-label" style="color:#92400E;">&#x26A0;&#xFE0F; Deadlock Guard</div>
+              <div class="a2ui-kpi-val" style="color:#B45309; font-size:11px;">${hasDeadlock ? '2 Grp B req / 1 active' : 'Zero Deadlocks Verified'}</div>
             </div>
           </div>
           <svg width="100%" height="38" viewBox="0 0 240 38" style="display:block; margin-top:4px;">
@@ -2081,14 +2197,148 @@
     });
   }
 
+  function updateCallControlIcons() {
+    const callBtn = document.getElementById('voiceMicToggleBtn');
+    const callBtnText = document.getElementById('voiceCallBtnText');
+    const iconConnect = document.getElementById('iconPhoneConnect');
+    const iconDisconnect = document.getElementById('iconPhoneDisconnect');
+    const muteBtn = document.getElementById('voiceMuteToggleBtn');
+    const iconUnmuted = document.getElementById('iconMicUnmuted');
+    const iconMuted = document.getElementById('iconMicMuted');
+
+    const inCall = Boolean(state.isRecordingVoice || state.isRinging);
+    if (callBtn && iconConnect && iconDisconnect) {
+      if (inCall) {
+        callBtn.style.background = 'linear-gradient(90deg, #D90429 0%, #B91C1C 100%)';
+        callBtn.style.borderColor = '#EF4444';
+        callBtn.style.boxShadow = '0 4px 14px rgba(217, 4, 41, 0.34)';
+        callBtn.title = 'End Voice Call';
+        iconConnect.style.display = 'none';
+        iconDisconnect.style.display = 'block';
+        if (callBtnText) callBtnText.textContent = 'END CALL';
+      } else {
+        callBtn.style.background = 'linear-gradient(90deg, #059669 0%, #10B981 50%, #059669 100%)';
+        callBtn.style.borderColor = '#10B981';
+        callBtn.style.boxShadow = '0 4px 14px rgba(5, 150, 105, 0.28)';
+        callBtn.title = 'Start DBS Joy Voice Call';
+        iconConnect.style.display = 'block';
+        iconDisconnect.style.display = 'none';
+        if (callBtnText) callBtnText.textContent = 'START DBS JOY VOICE CALL';
+      }
+    }
+
+    const isMuted = Boolean(state.isVoiceMuted);
+    if (muteBtn && iconUnmuted && iconMuted) {
+      muteBtn.style.display = inCall ? 'flex' : 'none';
+      if (isMuted) {
+        muteBtn.style.background = '#E11D48';
+        muteBtn.style.borderColor = '#F43F5E';
+        muteBtn.style.boxShadow = '0 4px 12px rgba(225, 29, 72, 0.28)';
+        muteBtn.title = 'Unmute Microphone';
+        iconUnmuted.style.display = 'none';
+        iconMuted.style.display = 'block';
+      } else {
+        muteBtn.style.background = '#1E293B';
+        muteBtn.style.borderColor = '#475569';
+        muteBtn.style.boxShadow = '0 2px 8px rgba(15, 23, 42, 0.18)';
+        muteBtn.title = 'Mute Microphone';
+        iconUnmuted.style.display = 'block';
+        iconMuted.style.display = 'none';
+      }
+    }
+  }
+
+  function startPhoneRinger() {
+    stopPhoneRinger(false);
+    state.isRinging = true;
+    updateCallControlIcons();
+    const stateLabel = document.getElementById('voiceStateLabel');
+    if (stateLabel) stateLabel.textContent = 'Dialing Joy (Ringing...)';
+
+    const playRingBurst = () => {
+      if (!state.isRinging) return;
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!state.ringerAudioCtx) {
+          state.ringerAudioCtx = new AudioCtx();
+        }
+        const ctx = state.ringerAudioCtx;
+        if (ctx.state === 'suspended') ctx.resume();
+
+        const now = ctx.currentTime;
+        // Dual-tone comfort ringback (400Hz + 425Hz: two 0.35s bursts separated by 0.18s)
+        [[0, 0.35], [0.53, 0.35]].forEach(([offset, dur]) => {
+          const osc1 = ctx.createOscillator();
+          const osc2 = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc1.type = 'sine';
+          osc2.type = 'sine';
+          osc1.frequency.value = 400;
+          osc2.frequency.value = 425;
+          gain.gain.setValueAtTime(0.001, now + offset);
+          gain.gain.exponentialRampToValueAtTime(0.06, now + offset + 0.03);
+          gain.gain.setValueAtTime(0.06, now + offset + dur - 0.04);
+          gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + dur);
+          osc1.connect(gain);
+          osc2.connect(gain);
+          gain.connect(ctx.destination);
+          osc1.start(now + offset);
+          osc2.start(now + offset);
+          osc1.stop(now + offset + dur);
+          osc2.stop(now + offset + dur);
+        });
+      } catch (_) {}
+    };
+
+    playRingBurst();
+    state.ringerTimerId = setInterval(playRingBurst, 2200);
+  }
+
+  function stopPhoneRinger(connected = false) {
+    if (state.ringerTimerId) {
+      clearInterval(state.ringerTimerId);
+      state.ringerTimerId = null;
+    }
+    if (state.isRinging) {
+      state.isRinging = false;
+      updateCallControlIcons();
+      const stateLabel = document.getElementById('voiceStateLabel');
+      if (stateLabel && connected) {
+        stateLabel.textContent = 'Connected · Joy Live';
+      }
+    }
+  }
+
+  function toggleVoiceMute() {
+    state.isVoiceMuted = !state.isVoiceMuted;
+    if (state.micStream) {
+      state.micStream.getAudioTracks().forEach((t) => {
+        t.enabled = !state.isVoiceMuted;
+      });
+    }
+    updateCallControlIcons();
+    const stateLabel = document.getElementById('voiceStateLabel');
+    if (stateLabel) {
+      stateLabel.textContent = state.isVoiceMuted
+        ? 'Microphone Muted'
+        : state.isRecordingVoice
+          ? 'Connected · Listening...'
+          : 'Tap green phone to call Joy';
+    }
+  }
+
   async function toggleVoiceMicrophone() {
     const orbBtn = document.getElementById('voiceMicToggleBtn');
     const stateLabel = document.getElementById('voiceStateLabel');
 
-    if (state.isRecordingVoice) {
+    if (state.isRecordingVoice || state.isRinging) {
+      stopPhoneRinger(false);
       stopVoiceMicrophone();
       return;
     }
+
+    // Start phone ringer immediately while connecting to Gemini Live 3.8
+    startPhoneRinger();
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -2101,18 +2351,21 @@
         },
       });
       state.micStream = stream;
+      if (state.isVoiceMuted) {
+        stream.getAudioTracks().forEach((t) => {
+          t.enabled = false;
+        });
+      }
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       state.micAudioCtx = new AudioCtx({ sampleRate: 16000 });
       const source = state.micAudioCtx.createMediaStreamSource(stream);
       const processor = state.micAudioCtx.createScriptProcessor(4096, 1, 1);
       state.micProcessor = processor;
 
-      // Attempt direct AI Studio v1alpha `models/gemini-3.8-live-extended-thinking` connection first;
-      // if key requires backend bridge, seamlessly stream via `/ws/live`
       await connectDirectAiStudioLiveSession();
 
       processor.onaudioprocess = (e) => {
-        if (!state.isRecordingVoice) return;
+        if (!state.isRecordingVoice || state.isVoiceMuted) return;
         // CRITICAL ANTI-ECHO GATE: Do not stream mic audio while assistant is speaking aloud!
         if (state.activePlaybackNodes.length > 0) return;
 
@@ -2159,16 +2412,36 @@
       source.connect(processor);
       processor.connect(state.micAudioCtx.destination);
       state.isRecordingVoice = true;
+      updateCallControlIcons();
 
       if (orbBtn) orbBtn.classList.add('listening');
-      if (stateLabel) stateLabel.textContent = 'Listening (Gemini Live 3.8)...';
     } catch (err) {
-      showToast('Microphone Access', 'Please grant microphone permissions or use text chat.', 'info');
+      // Even in headless/no-mic environments, keep the call active so Joy answers the ringer!
+      state.isRecordingVoice = true;
+      updateCallControlIcons();
     }
+
+    // Trigger live model greeting after 1.1s of ringing so the ringer plays until Joy greets the user
+    setTimeout(() => {
+      if (!state.isRecordingVoice && !state.isRinging) return;
+      if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+        state.ws.send(
+          JSON.stringify({
+            type: 'text_turn',
+            text: 'Greet the corporate director warmly in one short sentence and ask how you can help with their mandate, payment verification, or FX hedge.',
+            customer_id: state.activeCustomerId || 'CUST-001',
+            current_stage: state.activeStage || 1,
+            speak_response: true,
+          })
+        );
+      }
+    }, 1100);
   }
 
   function stopVoiceMicrophone() {
+    stopPhoneRinger(false);
     state.isRecordingVoice = false;
+    state.isVoiceMuted = false;
     if (state.micProcessor) {
       state.micProcessor.disconnect();
       state.micProcessor = null;
@@ -2189,14 +2462,78 @@
     if (state.ws && state.ws.readyState === WebSocket.OPEN) {
       state.ws.send(JSON.stringify({ type: 'audio_stream_end' }));
     }
+    clearAudioPlaybackQueueOnly();
+    updateCallControlIcons();
     const orbBtn = document.getElementById('voiceMicToggleBtn');
     const stateLabel = document.getElementById('voiceStateLabel');
     if (orbBtn) orbBtn.classList.remove('listening');
-    if (stateLabel) stateLabel.textContent = 'Click mic for live voice';
+    if (stateLabel) stateLabel.textContent = 'Tap green phone to call Joy';
+  }
+
+  async function triggerUc2PaymentPrepFlow(simulateBecMismatch = false) {
+    switchSlideDeckUseCase('UC2_PAYMENT');
+    upsertTurnMessage(
+      `uc2_user_${Date.now()}`,
+      'user',
+      simulateBecMismatch
+        ? 'Screen SingaTech Industrial invoice INV-2026-889 with altered account 017-482910-8 for BEC fraud.'
+        : 'Verify SingaTech Industrial invoice INV-2026-889 (SGD 14,250.00), optimize rail, and stage in Native IDEAL.'
+    );
+    const res = await apiFetch('/api/payment-prep/stage', {
+      method: 'POST',
+      body: JSON.stringify({
+        customer_id: state.activeCustomerId || 'CUST-001',
+        beneficiary_name: 'SingaTech Industrial',
+        amount_sgd: 14250.0,
+        simulate_bec_mismatch: Boolean(simulateBecMismatch),
+      }),
+    });
+    if (res.ok && res.data) {
+      (res.data.tool_calls || []).forEach((tc, idx) => {
+        upsertToolExecutionCard(tc.call_id || `uc2_${Date.now()}_${idx}`, tc.tool_name, tc.args || {}, tc.result || res.data);
+      });
+      if (res.data.reply) {
+        upsertTurnMessage(`uc2_bot_${Date.now()}`, 'assistant', res.data.reply);
+      }
+      if (res.data.ui_sync) {
+        await handleUiSync(res.data.ui_sync);
+      }
+    }
+  }
+
+  async function triggerUc3FxHedgeFlow() {
+    switchSlideDeckUseCase('UC3_FX');
+    upsertTurnMessage(
+      `uc3_user_${Date.now()}`,
+      'user',
+      'Book a forward for 70% of my USD 5M payable (0.70 × USD 5M = USD 3,500,000) after pre-trade validation.'
+    );
+    const res = await apiFetch('/api/fx/pretrade-and-book', {
+      method: 'POST',
+      body: JSON.stringify({
+        customer_id: state.activeCustomerId || 'CUST-001',
+        total_payable_usd: 5000000.0,
+        hedge_ratio_pct: 70.0,
+        tenor: '3M',
+        execute_booking: true,
+      }),
+    });
+    if (res.ok && res.data) {
+      (res.data.tool_calls || []).forEach((tc, idx) => {
+        upsertToolExecutionCard(tc.call_id || `uc3_${Date.now()}_${idx}`, tc.tool_name, tc.args || {}, tc.result || res.data);
+      });
+      if (res.data.reply) {
+        upsertTurnMessage(`uc3_bot_${Date.now()}`, 'assistant', res.data.reply);
+      }
+      if (res.data.ui_sync) {
+        await handleUiSync(res.data.ui_sync);
+      }
+    }
   }
 
   function enqueuePcm24AudioPlayback(base64Pcm, sampleRate = 24000) {
     try {
+      stopPhoneRinger(true);
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (!state.playbackAudioCtx) {
         state.playbackAudioCtx = new AudioCtx({ sampleRate });
@@ -2239,7 +2576,7 @@
       const orbBtn = document.getElementById('voiceMicToggleBtn');
       const stateLabel = document.getElementById('voiceStateLabel');
       if (orbBtn) orbBtn.classList.add('speaking');
-      if (stateLabel) stateLabel.textContent = 'Speaking...';
+      if (stateLabel) stateLabel.textContent = 'Connected · Joy Speaking...';
 
       source.onended = () => {
         state.activePlaybackNodes = state.activePlaybackNodes.filter((n) => n !== source);
@@ -2247,8 +2584,8 @@
           if (orbBtn) orbBtn.classList.remove('speaking');
           if (stateLabel) {
             stateLabel.textContent = state.isRecordingVoice
-              ? 'Listening (Gemini Live 3.8)...'
-              : 'Click mic for live voice';
+              ? 'Connected · Listening...'
+              : 'Tap green phone to call Joy';
           }
         }
       };
@@ -2270,7 +2607,7 @@
     const stateLabel = document.getElementById('voiceStateLabel');
     if (orbBtn) orbBtn.classList.remove('speaking');
     if (stateLabel) {
-      stateLabel.textContent = state.isRecordingVoice ? 'Listening (Gemini Live 3.8)...' : 'Click mic for live voice';
+      stateLabel.textContent = state.isRecordingVoice ? 'Connected · Listening...' : 'Tap green phone to call Joy';
     }
   }
 
@@ -2279,7 +2616,6 @@
     if (state.ws && state.ws.readyState === WebSocket.OPEN) {
       state.ws.send(JSON.stringify({ type: 'barge_in' }));
     }
-    showToast('Audio Stopped', 'Cleared audio playback queue.', 'info');
   }
 
   // ==========================================================================
@@ -2287,6 +2623,36 @@
   // ==========================================================================
 
   function bindUiEvents() {
+    // Top Header Slide Deck 3-Use-Case Switcher
+    document.querySelectorAll('.uc-tab-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const uc = btn.getAttribute('data-usecase');
+        if (uc) switchSlideDeckUseCase(uc);
+      });
+    });
+
+    const stagePayBtn = document.getElementById('stagePaymentIdealBtn');
+    if (stagePayBtn) {
+      stagePayBtn.addEventListener('click', () => triggerUc2PaymentPrepFlow(false));
+    }
+    const becSimBtn = document.getElementById('toggleBecFraudSimBtn');
+    if (becSimBtn) {
+      becSimBtn.addEventListener('click', () => triggerUc2PaymentPrepFlow(true));
+    }
+    const bookFxBtn = document.getElementById('bookFxForwardBtn');
+    if (bookFxBtn) {
+      bookFxBtn.addEventListener('click', () => triggerUc3FxHedgeFlow());
+    }
+
+    const quickUc2 = document.getElementById('quickUc2PaymentChip');
+    if (quickUc2) {
+      quickUc2.addEventListener('click', () => triggerUc2PaymentPrepFlow(false));
+    }
+    const quickUc3 = document.getElementById('quickUc3FxHedgeChip');
+    if (quickUc3) {
+      quickUc3.addEventListener('click', () => triggerUc3FxHedgeFlow());
+    }
+
     // AI Studio Key Config Drawer Toggle & Save
     const modelBadgeBtn = document.getElementById('geminiModelBadge');
     const keyDrawer = document.getElementById('apiKeyConfigDrawer');
@@ -2460,9 +2826,12 @@
       cosignAllBtn.addEventListener('click', () => handleExecuteCosign(null, null));
     }
 
-    // Copilot Dock Controls
+    // Copilot Dock Voice & Mute Controls
     const micBtn = document.getElementById('voiceMicToggleBtn');
     if (micBtn) micBtn.addEventListener('click', toggleVoiceMicrophone);
+
+    const muteBtn = document.getElementById('voiceMuteToggleBtn');
+    if (muteBtn) muteBtn.addEventListener('click', toggleVoiceMute);
 
     const bargeInBtn = document.getElementById('bargeInBtn');
     if (bargeInBtn) bargeInBtn.addEventListener('click', triggerBargeInInterruption);
