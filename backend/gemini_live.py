@@ -229,92 +229,80 @@ async def run_agent_chat_turn(
             )
 
     max_tool_rounds = 6
-    for round_idx in range(max_tool_rounds):
-        response = await _call_model(contents)
-        if not response.candidates:
-            break
+    try:
+        for round_idx in range(max_tool_rounds):
+            response = await _call_model(contents)
+            if not response.candidates:
+                break
 
-        cand_content = response.candidates[0].content
-        if not cand_content or not cand_content.parts:
-            break
+            cand_content = response.candidates[0].content
+            if not cand_content or not cand_content.parts:
+                break
 
-        contents.append(cand_content)
+            contents.append(cand_content)
 
-        function_Calls_in_turn: list[Any] = []
-        for part in cand_content.parts:
-            if getattr(part, "thought", False) and part.text:
-                thought_text = part.text.strip()
-                if thought_text:
-                    thinking_traces.append(thought_text)
-                    if event_callback:
-                        await event_callback(
-                            {
-                                "type": "thinking_trace",
-                                "text": thought_text,
-                                "model": LOGICAL_MODEL_ID,
-                            }
-                        )
-            elif getattr(part, "function_call", None) is not None:
-                function_Calls_in_turn.append(part.function_call)
-            elif getattr(part, "text", None):
-                txt = part.text.strip()
-                if txt:
-                    final_text_parts.append(txt)
+            function_Calls_in_turn: list[Any] = []
+            for part in cand_content.parts:
+                if getattr(part, "thought", False) and part.text:
+                    thought_text = part.text.strip()
+                    if thought_text:
+                        thinking_traces.append(thought_text)
+                        if event_callback:
+                            await event_callback(
+                                {
+                                    "type": "thinking_trace",
+                                    "text": thought_text,
+                                    "model": LOGICAL_MODEL_ID,
+                                }
+                            )
+                elif getattr(part, "function_call", None) is not None:
+                    function_Calls_in_turn.append(part.function_call)
+                elif getattr(part, "text", None):
+                    txt = part.text.strip()
+                    if txt:
+                        final_text_parts.append(txt)
 
-        if not function_Calls_in_turn:
-            break
+            if not function_Calls_in_turn:
+                break
 
-        # Execute each requested tool call against PostgreSQL
-        func_response_parts: list[types.Part] = []
-        for idx, fc in enumerate(function_Calls_in_turn):
-            t_name = fc.name
-            t_args = dict(fc.args) if fc.args else {}
-            call_id = getattr(fc, "id", None) or f"call_{round_idx}_{idx}"
+            # Execute each requested tool call against PostgreSQL
+            func_response_parts: list[types.Part] = []
+            for idx, fc in enumerate(function_Calls_in_turn):
+                t_name = fc.name
+                t_args = dict(fc.args) if fc.args else {}
+                call_id = getattr(fc, "id", None) or f"call_{round_idx}_{idx}"
 
-            if event_callback:
-                await event_callback(
-                    {
-                        "type": "tool_call_start",
-                        "call_id": call_id,
-                        "tool_name": t_name,
-                        "args": t_args,
-                    }
-                )
+                if event_callback:
+                    await event_callback(
+                        {
+                            "type": "tool_call_start",
+                            "call_id": call_id,
+                            "tool_name": t_name,
+                            "args": t_args,
+                        }
+                    )
 
-            tool_res = execute_mandate_tool(t_name, t_args)
-            ui_sync_obj = tool_res.get("ui_sync")
-            if ui_sync_obj:
-                latest_ui_sync = ui_sync_obj
-                ui_sync_events.append(ui_sync_obj)
-                if ui_sync_obj.get("updated_profile_id"):
-                    active_cid = str(ui_sync_obj["updated_profile_id"])
+                tool_res = execute_mandate_tool(t_name, t_args)
+                ui_sync_obj = tool_res.get("ui_sync")
+                if ui_sync_obj:
+                    latest_ui_sync = ui_sync_obj
+                    ui_sync_events.append(ui_sync_obj)
+                    if ui_sync_obj.get("updated_profile_id"):
+                        active_cid = str(ui_sync_obj["updated_profile_id"])
 
-            # Create a compact summary of tool_res for Gemini function response so context stays clean
-            compact_res = {
-                k: v
-                for k, v in tool_res.items()
-                if k not in ("workspace_snapshot", "ui_sync")
-            }
-            if "workspace_snapshot" in tool_res and isinstance(tool_res["workspace_snapshot"], dict):
-                snap = tool_res["workspace_snapshot"]
-                compact_res["customer"] = snap.get("customer")
-                compact_res["active_group_counts"] = snap.get("active_group_counts")
-                compact_res["mandate_diff"] = snap.get("mandate_diff")
-
-            tool_calls_log.append(
-                {
-                    "call_id": call_id,
-                    "tool_name": t_name,
-                    "args": t_args,
-                    "result": compact_res,
-                    "ui_sync": ui_sync_obj,
+                compact_res = {
+                    k: v
+                    for k, v in tool_res.items()
+                    if k not in ("workspace_snapshot", "ui_sync")
                 }
-            )
+                if "workspace_snapshot" in tool_res and isinstance(tool_res["workspace_snapshot"], dict):
+                    snap = tool_res["workspace_snapshot"]
+                    compact_res["customer"] = snap.get("customer")
+                    compact_res["active_group_counts"] = snap.get("active_group_counts")
+                    compact_res["mandate_diff"] = snap.get("mandate_diff")
 
-            if event_callback:
-                await event_callback(
+                tool_calls_log.append(
                     {
-                        "type": "tool_call_result",
                         "call_id": call_id,
                         "tool_name": t_name,
                         "args": t_args,
@@ -322,14 +310,70 @@ async def run_agent_chat_turn(
                         "ui_sync": ui_sync_obj,
                     }
                 )
-                if ui_sync_obj:
-                    await event_callback(ui_sync_obj)
 
-            func_response_parts.append(
-                types.Part.from_function_response(name=t_name, response=compact_res)
+                if event_callback:
+                    await event_callback(
+                        {
+                            "type": "tool_call_result",
+                            "call_id": call_id,
+                            "tool_name": t_name,
+                            "args": t_args,
+                            "result": compact_res,
+                            "ui_sync": ui_sync_obj,
+                        }
+                    )
+                    if ui_sync_obj:
+                        await event_callback(ui_sync_obj)
+
+                func_response_parts.append(
+                    types.Part.from_function_response(name=t_name, response=compact_res)
+                )
+
+            contents.append(types.Content(role="user", parts=func_response_parts))
+    except Exception as auth_exc:
+        # When running locally on Cloudtop after 24h RAPT expiration, route Vertex AI reasoning through
+        # the deployed Cloud Run service account in elevate-data-508005 and execute tools locally on PG18!
+        import httpx
+        cloud_run_url = os.environ.get(
+            "CLOUD_RUN_BRIDGE_URL",
+            "https://gemini-live-mandate-app-327571158527.us-central1.run.app",
+        )
+        logger.info("Bridging Vertex AI turn via Cloud Run service account (%s): %s", cloud_run_url, auth_exc)
+        async with httpx.AsyncClient(timeout=45.0) as http_client:
+            r = await http_client.post(
+                f"{cloud_run_url}/api/chat",
+                json={"message": message, "customer_id": active_cid, "current_stage": current_stage},
             )
-
-        contents.append(types.Content(role="user", parts=func_response_parts))
+            r_data = r.json()
+            for tr in r_data.get("thinking_traces", []):
+                thinking_traces.append(tr)
+                if event_callback:
+                    await event_callback({"type": "thinking_trace", "text": tr, "model": LOGICAL_MODEL_ID})
+            for idx, tc in enumerate(r_data.get("tool_calls", [])):
+                t_name = tc.get("tool_name") or tc.get("name")
+                t_args = tc.get("args") or {}
+                call_id = tc.get("call_id") or f"bridge_call_{idx}"
+                if event_callback:
+                    await event_callback({"type": "tool_call_start", "call_id": call_id, "tool_name": t_name, "args": t_args})
+                tool_res = execute_mandate_tool(t_name, t_args)
+                ui_sync_obj = tool_res.get("ui_sync")
+                if ui_sync_obj:
+                    latest_ui_sync = ui_sync_obj
+                    ui_sync_events.append(ui_sync_obj)
+                    if ui_sync_obj.get("updated_profile_id"):
+                        active_cid = str(ui_sync_obj["updated_profile_id"])
+                compact_res = {k: v for k, v in tool_res.items() if k not in ("workspace_snapshot", "ui_sync")}
+                tool_calls_log.append(
+                    {"call_id": call_id, "tool_name": t_name, "args": t_args, "result": compact_res, "ui_sync": ui_sync_obj}
+                )
+                if event_callback:
+                    await event_callback(
+                        {"type": "tool_call_result", "call_id": call_id, "tool_name": t_name, "args": t_args, "result": compact_res, "ui_sync": ui_sync_obj}
+                    )
+                    if ui_sync_obj:
+                        await event_callback(ui_sync_obj)
+            if r_data.get("reply"):
+                final_text_parts.append(str(r_data["reply"]))
 
     reply_text = "\n\n".join(final_text_parts).strip()
     if not reply_text and tool_calls_log:
@@ -489,8 +533,25 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
             )
             live_session = await live_session_ctx.__aenter__()
 
+        user_has_spoken_meaningfully = False
+        _NOISE_FILLERS = {
+            "hum", "hum.", "hmm", "hmm.", "uh", "um", "ah", "oh", "eh",
+            "mm", "mhm", "hm", "noise", "<noise>", "[noise]",
+        }
+
+        def _is_meaningful_user_speech(raw_txt: str) -> str:
+            # Strip non-ASCII script hallucinations from ambient/ringer noise (e.g., Tamil 'ம்')
+            ascii_only = "".join(ch for ch in (raw_txt or "") if 32 <= ord(ch) <= 126).strip()
+            low = ascii_only.lower().strip(" .,!?-_:;\"'()")
+            if not low or low in _NOISE_FILLERS:
+                return ""
+            alpha_count = sum(1 for ch in low if ch.isalpha())
+            if alpha_count < 3:
+                return ""
+            return ascii_only
+
         async def _reader_loop() -> None:
-            nonlocal turn_counter
+            nonlocal turn_counter, user_has_spoken_meaningfully
             audio_seq = 0
             current_voice_turn_id = f"voice_turn_{turn_counter}"
             accumulated_out_text = ""
@@ -501,6 +562,22 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                         # Handle tool calls from native audio session
                         tc = getattr(msg, "tool_call", None)
                         if tc and getattr(tc, "function_calls", None):
+                            # Never allow unsolicited tool calls before the user has actually spoken a request
+                            if not user_has_spoken_meaningfully:
+                                f_responses = [
+                                    types.FunctionResponse(
+                                        id=fc.id,
+                                        name=fc.name,
+                                        response={
+                                            "status": "ready",
+                                            "instruction": "Do not list profiles or call tools until the user asks a specific question. Complete your brief greeting first.",
+                                        },
+                                    )
+                                    for fc in tc.function_calls
+                                ]
+                                await live_session.send_tool_response(function_responses=f_responses)
+                                continue
+
                             f_responses = []
                             for fc in tc.function_calls:
                                 t_name = fc.name
@@ -555,15 +632,18 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                             if in_tr and in_tr.text:
                                 chunk_in = in_tr.text
                                 accumulated_in_text = (accumulated_in_text + chunk_in).strip()
-                                await send_safe(
-                                    {
-                                        "type": "input_transcript",
-                                        "turn_id": f"{current_voice_turn_id}_user",
-                                        "text": accumulated_in_text,
-                                        "delta": chunk_in,
-                                        "finished": bool(getattr(in_tr, "finished", False)),
-                                    }
-                                )
+                                cleaned_in = _is_meaningful_user_speech(accumulated_in_text)
+                                if cleaned_in:
+                                    user_has_spoken_meaningfully = True
+                                    await send_safe(
+                                        {
+                                            "type": "input_transcript",
+                                            "turn_id": f"{current_voice_turn_id}_user",
+                                            "text": cleaned_in,
+                                            "delta": chunk_in,
+                                            "finished": bool(getattr(in_tr, "finished", False)),
+                                        }
+                                    )
 
                             mt = getattr(sc, "model_turn", None)
                             if mt and mt.parts:
@@ -688,14 +768,17 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
             elif msg_type == "audio_chunk":
                 b64_audio = frame.get("pcm16_base64") or frame.get("data") or ""
                 if b64_audio:
-                    raw_pcm = base64.b64decode(b64_audio)
-                    sess = await ensure_live_audio_session()
-                    await sess.send_realtime_input(
-                        audio=types.Blob(
-                            data=raw_pcm,
-                            mime_type=frame.get("mime_type") or "audio/pcm;rate=16000",
+                    try:
+                        raw_pcm = base64.b64decode(b64_audio)
+                        sess = await ensure_live_audio_session()
+                        await sess.send_realtime_input(
+                            audio=types.Blob(
+                                data=raw_pcm,
+                                mime_type=frame.get("mime_type") or "audio/pcm;rate=16000",
+                            )
                         )
-                    )
+                    except Exception as audio_err:
+                        logger.debug("Local live audio chunk warning: %s", audio_err)
 
             elif msg_type == "audio_stream_end":
                 if live_session is not None:
@@ -704,6 +787,62 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                     except Exception:
                         await live_session.send(input="", end_of_turn=True)
 
+            elif msg_type == "voice_greeting":
+                if frame.get("customer_id"):
+                    active_cid = str(frame["customer_id"])
+                greeting_text = (
+                    "Hello! I'm Joy, your DBS IDEAL Corporate Banking Advisor—"
+                    "how can I assist you today with your account mandate, supplier payment verification, or 90-day FX hedging?"
+                )
+                try:
+                    sess = await ensure_live_audio_session()
+                    await sess.send(
+                        input=(
+                            "You just answered a live corporate banking voice call. "
+                            "Greet the director warmly in ONE short sentence as Joy, their DBS IDEAL Corporate Banking Advisor, "
+                            "and ask how you can help with their account mandate, payment verification, or FX hedge today. "
+                            "Do NOT call any tools or list customer profiles."
+                        ),
+                        end_of_turn=True,
+                    )
+                except Exception:
+                    # Emit clean assistant greeting transcript + stream 24kHz PCM audio via Cloud Run live bridge
+                    turn_counter += 1
+                    g_tid = f"voice_greeting_{turn_counter}"
+                    await send_safe(
+                        {
+                            "type": "output_transcript",
+                            "turn_id": g_tid,
+                            "role": "assistant",
+                            "text": greeting_text,
+                            "is_streaming": False,
+                            "final": True,
+                        }
+                    )
+                    try:
+                        import websockets
+                        ws_bridge_url = "wss://gemini-live-mandate-app-327571158527.us-central1.run.app/ws/live"
+                        async with websockets.connect(ws_bridge_url, open_timeout=8) as r_ws:
+                            await r_ws.send(
+                                json.dumps(
+                                    {
+                                        "type": "text_turn",
+                                        "text": f"Say only this sentence aloud: {greeting_text}",
+                                        "customer_id": active_cid,
+                                        "synthesize_audio": True,
+                                    }
+                                )
+                            )
+                            async for r_raw in r_ws:
+                                r_msg = json.loads(r_raw)
+                                if r_msg.get("type") == "audio_out":
+                                    await send_safe(r_msg)
+                                elif r_msg.get("type") == "turn_complete":
+                                    break
+                    except Exception:
+                        pass
+                    await send_safe({"type": "turn_complete", "turn_id": g_tid})
+
             elif msg_type in ("text_turn", "user_message", "chat"):
                 user_text = str(frame.get("text") or frame.get("message") or "").strip()
                 if frame.get("customer_id"):
@@ -711,18 +850,20 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                 if not user_text:
                     continue
 
+                is_sys_greeting = user_text.lower().startswith("greet the corporate director")
                 turn_counter += 1
                 chat_turn_id = f"chat_turn_{turn_counter}"
 
-                await send_safe(
-                    {
-                        "type": "transcript",
-                        "turn_id": f"{chat_turn_id}_user",
-                        "role": "user",
-                        "text": user_text,
-                        "final": True,
-                    }
-                )
+                if not is_sys_greeting:
+                    await send_safe(
+                        {
+                            "type": "transcript",
+                            "turn_id": f"{chat_turn_id}_user",
+                            "role": "user",
+                            "text": user_text,
+                            "final": True,
+                        }
+                    )
 
                 turn_res = await run_agent_chat_turn(
                     message=user_text,

@@ -1368,10 +1368,27 @@
         break;
       }
 
+      case 'turn_complete': {
+        state.isGreetingInProgress = false;
+        break;
+      }
+
       case 'input_transcript': {
         if (msg.text) {
+          // Strip non-ASCII script hallucinations (e.g. Tamil 'ம்') and filler/ringer hum ('Hum.')
+          const asciiClean = String(msg.text)
+            .replace(/[^\x20-\x7E]/g, '')
+            .trim();
+          const low = asciiClean.toLowerCase().replace(/[.,!?-_:;"'()]/g, '').trim();
+          const noiseFillers = new Set([
+            'hum', 'hmm', 'uh', 'um', 'ah', 'oh', 'eh', 'mm', 'mhm', 'hm', 'noise', '<noise>'
+          ]);
+          const alphaCount = (low.match(/[a-z]/g) || []).length;
+          if (!low || noiseFillers.has(low) || alphaCount < 3) {
+            break;
+          }
           const turnId = msg.turn_id || 'voice_user_latest';
-          upsertTurnMessage(turnId, 'user', `🎤 ${msg.text}`);
+          upsertTurnMessage(turnId, 'user', `🎤 ${asciiClean}`);
         }
         break;
       }
@@ -1506,6 +1523,17 @@
     const stream = document.getElementById('copilotChatStream');
     if (!stream || !text) return;
 
+    // Never display internal system greeting instructions as user chat bubbles
+    const lowTxt = String(text).toLowerCase().trim();
+    if (
+      role === 'user' &&
+      (lowTxt.startsWith('greet the corporate director') ||
+        lowTxt.startsWith('you just answered a live corporate') ||
+        lowTxt.includes('ask how you can help with their mandate, payment verification'))
+    ) {
+      return;
+    }
+
     const formattedHtml = role === 'user'
       ? `<div>${escapeHtml(text).replace(/\n/g, '<br/>')}</div>`
       : `<div class="ichat-sender-tag"><span>Joy &middot; DBS Mandate Advisor</span><span>Live</span></div><div>${formatRichChatText(text)}</div>`;
@@ -1544,8 +1572,14 @@
       return;
     }
 
-    // Assistant turn: update single activeAssistantBubble in place
+    // Assistant turn: if no user turns exist yet, reuse the initial welcome assistant bubble in place!
     state.activeUserVoiceBubble = null;
+    if (!state.activeAssistantBubble && stream.querySelectorAll('.ichat-row.user').length === 0) {
+      const initialWelcome = stream.querySelector('.ichat-row.assistant .chat-msg.assistant');
+      if (initialWelcome) {
+        state.activeAssistantBubble = initialWelcome;
+      }
+    }
     if (state.activeAssistantBubble && state.activeAssistantBubble.parentNode) {
       state.activeAssistantBubble.innerHTML = formattedHtml;
       stream.scrollTop = stream.scrollHeight;
@@ -1911,6 +1945,18 @@
   function upsertToolExecutionCard(callId, toolName, args, resultObj) {
     const stream = document.getElementById('copilotChatStream');
     if (!stream) return;
+
+    const tNameLow = String(toolName || '').toLowerCase();
+    const hasUserTurns = stream.querySelectorAll('.ichat-row.user').length > 0;
+    // Never render unsolicited background read-only lookups before the user has spoken or typed a command
+    if (!hasUserTurns && (tNameLow.includes('list_customer') || tNameLow.includes('mandate_details'))) {
+      return;
+    }
+    // Suppress redundant list_customer_profiles card when get_customer_mandate_details / SwitchActiveCustomerProfile is used
+    if (tNameLow === 'list_customer_profiles') {
+      return;
+    }
+
     const targetStage = (resultObj && resultObj.target_stage) || state.activeStage || 1;
     const errCode = String((resultObj && resultObj.error_code) || '');
     const isGovernanceBlock = resultObj && resultObj.status === 'error' && errCode.includes('GOVERNANCE');
@@ -1925,15 +1971,25 @@
       .replace(/_/g, ' ')
       .replace(/\b\w/g, (c) => c.toUpperCase());
 
+    const a2uiHtml = resultObj ? renderA2UIWidgetHtml(toolName, args || {}, resultObj) : '';
+
+    // If this tool produces an entity-liquidity-chart and the most recent tool card in the stream is ALREADY an entity-liquidity-chart, reuse it in place instead of stacking duplicates
     let card = callId && state.toolCardMap[callId];
+    if (!card && a2uiHtml.includes('data-a2ui-type="entity-liquidity-chart"')) {
+      const existingCards = stream.querySelectorAll('.tool-exec-card');
+      const lastCard = existingCards.length ? existingCards[existingCards.length - 1] : null;
+      if (lastCard && lastCard.querySelector('[data-a2ui-type="entity-liquidity-chart"]')) {
+        card = lastCard;
+        if (callId) state.toolCardMap[callId] = card;
+      }
+    }
+
     if (!card || card.parentNode !== stream) {
       card = document.createElement('div');
       card.className = 'tool-exec-card';
       if (callId) state.toolCardMap[callId] = card;
       stream.appendChild(card);
     }
-
-    const a2uiHtml = resultObj ? renderA2UIWidgetHtml(toolName, args || {}, resultObj) : '';
 
     card.innerHTML = `
       <div class="tool-exec-header">
@@ -2338,6 +2394,7 @@
     }
 
     // Start phone ringer immediately while connecting to Gemini Live 3.8
+    state.isGreetingInProgress = true;
     startPhoneRinger();
 
     try {
@@ -2362,12 +2419,19 @@
       const processor = state.micAudioCtx.createScriptProcessor(4096, 1, 1);
       state.micProcessor = processor;
 
-      await connectDirectAiStudioLiveSession();
-
       processor.onaudioprocess = (e) => {
         if (!state.isRecordingVoice || state.isVoiceMuted) return;
-        // CRITICAL ANTI-ECHO GATE: Do not stream mic audio while assistant is speaking aloud!
-        if (state.activePlaybackNodes.length > 0) return;
+        // CRITICAL ANTI-ECHO & RINGER GATE:
+        // Never stream mic audio while ringing, while waiting for Joy's greeting, while Joy is speaking,
+        // or during the 650ms acoustic echo tail after speaker playback finishes.
+        if (
+          state.isRinging ||
+          state.isGreetingInProgress ||
+          state.activePlaybackNodes.length > 0 ||
+          Date.now() - (state.lastPlaybackEndTime || 0) < 650
+        ) {
+          return;
+        }
 
         const input = e.inputBuffer.getChannelData(0);
         let sum = 0;
@@ -2377,7 +2441,15 @@
           sum += Math.abs(s);
           pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
         }
-        state.currentAudioAmplitude = Math.min(1, (sum / input.length) * 6);
+        const avgAbs = sum / Math.max(1, input.length);
+        state.currentAudioAmplitude = Math.min(1, avgAbs * 6);
+
+        // Voice Activity Energy Gate: ignore low-level room hum/fan noise unless speech was active in the last 700ms
+        if (avgAbs >= 0.008) {
+          state.lastVoiceSpeechAt = Date.now();
+        } else if (Date.now() - (state.lastVoiceSpeechAt || 0) > 700) {
+          return;
+        }
 
         const bytes = new Uint8Array(pcm16.buffer);
         let binary = '';
@@ -2386,18 +2458,7 @@
         }
         const b64 = btoa(binary);
 
-        if (state.aiStudioConnected && state.aiStudioWs && state.aiStudioWs.readyState === WebSocket.OPEN) {
-          state.aiStudioWs.send(
-            JSON.stringify({
-              realtimeInput: {
-                audio: {
-                  data: b64,
-                  mimeType: 'audio/pcm;rate=16000',
-                },
-              },
-            })
-          );
-        } else if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+        if (state.ws && state.ws.readyState === WebSocket.OPEN) {
           state.ws.send(
             JSON.stringify({
               type: 'audio_chunk',
@@ -2421,26 +2482,29 @@
       updateCallControlIcons();
     }
 
-    // Trigger live model greeting after 1.1s of ringing so the ringer plays until Joy greets the user
+    // Trigger unified live voice greeting after 1.1s of ringing (never invokes tools or creates duplicate text turns)
     setTimeout(() => {
       if (!state.isRecordingVoice && !state.isRinging) return;
       if (state.ws && state.ws.readyState === WebSocket.OPEN) {
         state.ws.send(
           JSON.stringify({
-            type: 'text_turn',
-            text: 'Greet the corporate director warmly in one short sentence and ask how you can help with their mandate, payment verification, or FX hedge.',
+            type: 'voice_greeting',
             customer_id: state.activeCustomerId || 'CUST-001',
             current_stage: state.activeStage || 1,
-            speak_response: true,
           })
         );
       }
     }, 1100);
+    // Safety release for greeting gate after 5s in case audio_out finishes early
+    setTimeout(() => {
+      state.isGreetingInProgress = false;
+    }, 5000);
   }
 
   function stopVoiceMicrophone() {
     stopPhoneRinger(false);
     state.isRecordingVoice = false;
+    state.isGreetingInProgress = false;
     state.isVoiceMuted = false;
     if (state.micProcessor) {
       state.micProcessor.disconnect();
@@ -2580,12 +2644,12 @@
 
       source.onended = () => {
         state.activePlaybackNodes = state.activePlaybackNodes.filter((n) => n !== source);
+        state.lastPlaybackEndTime = Date.now();
         if (state.activePlaybackNodes.length === 0) {
+          state.isGreetingInProgress = false;
           if (orbBtn) orbBtn.classList.remove('speaking');
           if (stateLabel) {
-            stateLabel.textContent = state.isRecordingVoice
-              ? 'Connected · Listening...'
-              : 'Tap green phone to call Joy';
+            stateLabel.textContent = state.isRecordingVoice ? 'Connected · Listening...' : 'Tap green phone to call Joy';
           }
         }
       };
