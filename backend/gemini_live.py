@@ -582,7 +582,7 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                                         "turn_id": current_voice_turn_id,
                                         "role": "assistant",
                                         "text": accumulated_out_text.strip(),
-                                        "delta": out_tr.text,
+                                        "is_streaming": True,
                                         "finished": bool(getattr(out_tr, "finished", False)),
                                     }
                                 )
@@ -591,10 +591,11 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                                 if accumulated_out_text.strip():
                                     await send_safe(
                                         {
-                                            "type": "transcript",
+                                            "type": "output_transcript",
                                             "turn_id": current_voice_turn_id,
                                             "role": "assistant",
                                             "text": accumulated_out_text.strip(),
+                                            "is_streaming": False,
                                             "final": True,
                                         }
                                     )

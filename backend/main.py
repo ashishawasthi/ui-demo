@@ -476,32 +476,42 @@ async def ws_live_endpoint(websocket: WebSocket) -> None:
 
 
 # ============================================================================
-# Frontend Static Asset Serving
+# Frontend Static Asset Serving (with strict Cache-Control: no-store)
 # ============================================================================
+NO_CACHE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
+
 @app.get("/")
 async def serve_index() -> Any:
     index_path = FRONTEND_DIR / "index.html"
     if index_path.exists():
-        return FileResponse(index_path)
+        return FileResponse(index_path, headers=NO_CACHE_HEADERS)
     return HTMLResponse(
-        "<html><body><h1>DBS IDEAL Change of Account Mandate API Server Running</h1></body></html>"
+        "<html><body><h1>DBS IDEAL Change of Account Mandate API Server Running</h1></body></html>",
+        headers=NO_CACHE_HEADERS,
     )
 
 
 @app.get("/styles.css")
+@app.get("/static/styles.css")
 async def serve_styles() -> Any:
     css_path = FRONTEND_DIR / "styles.css"
     if css_path.exists():
-        return FileResponse(css_path, media_type="text/css")
-    return HTMLResponse("/* styles.css pending */", media_type="text/css")
+        return FileResponse(css_path, media_type="text/css", headers=NO_CACHE_HEADERS)
+    return HTMLResponse("/* styles.css pending */", media_type="text/css", headers=NO_CACHE_HEADERS)
 
 
 @app.get("/app.js")
+@app.get("/static/app.js")
 async def serve_app_js() -> Any:
     js_path = FRONTEND_DIR / "app.js"
     if js_path.exists():
-        return FileResponse(js_path, media_type="application/javascript")
-    return HTMLResponse("// app.js pending", media_type="application/javascript")
+        return FileResponse(js_path, media_type="application/javascript", headers=NO_CACHE_HEADERS)
+    return HTMLResponse("// app.js pending", media_type="application/javascript", headers=NO_CACHE_HEADERS)
 
 
 if FRONTEND_DIR.exists():

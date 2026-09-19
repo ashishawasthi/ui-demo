@@ -28,6 +28,8 @@
     currentAudioAmplitude: 0,
     lastAudioSig: '',
     turnBubbleMap: {},
+    activeAssistantBubble: null,
+    activeUserVoiceBubble: null,
     toolCardMap: {},
     aiStudioWs: null,
     aiStudioConnected: false,
@@ -37,6 +39,35 @@
   // ==========================================================================
   // 1. Utility Helpers & Formatting
   // ==========================================================================
+
+  const BANKING_TERM_LABELS = {
+    OPERATING: 'Operating Account',
+    MULTI_CURRENCY: 'Multi-Currency',
+    TRADE_FINANCE_FX: 'Trade & FX Facility',
+    ESCROW_TRUST: 'Escrow & Trust',
+    TREASURY_SWEEP: 'Treasury Sweep',
+    SME: 'SME Banking',
+    MNC_SUBSIDIARY: 'Institutional Banking',
+    PARTNERSHIP_LLP: 'Professional Partnership',
+    HIGH_GROWTH_TECH: 'Growth & Tech Banking',
+    REGULATED_TRADE: 'Global Trade & Commodities',
+    AMENDMENT_IN_PROGRESS: 'Draft Amendment',
+    PENDING_APPROVAL: 'Pending Co-Signer',
+    IDEAL_TOKEN_AUTHENTICATED: 'IDEAL Token Active',
+    PENDING_ADDITION: 'New Appointment',
+    ACTIVE: 'Active',
+    REVOKED: 'Revoked',
+  };
+
+  function formatBankingTerm(val) {
+    if (!val) return '';
+    const key = String(val).trim().toUpperCase();
+    if (BANKING_TERM_LABELS[key]) return BANKING_TERM_LABELS[key];
+    return String(val)
+      .replace(/_/g, ' ')
+      .toLowerCase()
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+  }
 
   function formatCurrency(amount, currency = 'SGD') {
     const num = Number(amount || 0);
@@ -194,7 +225,7 @@
       selectEl.innerHTML = customers
         .map((c) => {
           const selected = c.customer_id === activeId ? 'selected' : '';
-          return `<option value="${escapeHtml(c.customer_id)}" ${selected}>${escapeHtml(c.customer_id)} &mdash; ${escapeHtml(c.company_name)} (UEN: ${escapeHtml(c.uen)})</option>`;
+          return `<option value="${escapeHtml(c.customer_id)}" ${selected}>${escapeHtml(c.company_name)} (UEN: ${escapeHtml(c.uen)})</option>`;
         })
         .join('');
     }
@@ -205,9 +236,7 @@
           const isActive = c.customer_id === activeId;
           return `
             <button type="button" class="profile-pill-btn ${isActive ? 'active' : ''}" data-customer-id="${escapeHtml(c.customer_id)}">
-              <span>${escapeHtml(c.customer_id)}</span>
-              <span>&bull;</span>
-              <span>${escapeHtml(c.company_name.split(' ')[0])} ${escapeHtml(c.company_name.split(' ')[1] || '')}</span>
+              <span>${escapeHtml(c.company_name)}</span>
             </button>
           `;
         })
@@ -246,9 +275,9 @@
       if (targetStage) {
         navigateToStage(targetStage, { flash: true });
       }
-      showToast('Corporate Profile Switched', `Active entity set to ${customerId}`, 'success');
+      const cName = (snapshot && snapshot.customer && snapshot.customer.company_name) || customerId;
+      showToast('Organization Switched', `Active profile: ${cName}`, 'success');
     } else {
-      // Fallback direct load if endpoint path differs
       await loadCustomerMandateSnapshot(customerId);
     }
   }
@@ -277,24 +306,24 @@
       renderCustomerSwitcherHeader(state.customers, customer.customer_id);
     }
 
-    // Update Top Header Telemetry Badges
     const accounts = snapshot.accounts || [];
     const totalSgdBalance = accounts.reduce((acc, row) => {
       const sgdVal = Number(row.sgd_equivalent_balance ?? row.current_balance ?? row.balance ?? 0);
       return acc + sgdVal;
     }, 0);
 
+    const heroTitleEl = document.getElementById('heroCompanyNameTitle');
     const uenEl = document.getElementById('headerUenVal');
     const typeEl = document.getElementById('headerEntityTypeBadge');
     const kycEl = document.getElementById('headerKycStatusBadge');
     const balEl = document.getElementById('headerAggregateBalanceVal');
 
+    if (heroTitleEl) heroTitleEl.textContent = customer.company_name || 'Corporate Entity';
     if (uenEl) uenEl.textContent = customer.uen || '—';
-    if (typeEl) typeEl.textContent = customer.entity_type || 'CORPORATE';
-    if (kycEl) kycEl.textContent = `${customer.kyc_status || 'VERIFIED'} • ${customer.ideal_auth_status || customer.ideal_corp_id || 'IDEAL TOKEN'}`;
+    if (typeEl) typeEl.textContent = formatBankingTerm(customer.entity_type || 'SME');
+    if (kycEl) kycEl.textContent = formatBankingTerm(customer.ideal_auth_status || 'IDEAL_TOKEN_AUTHENTICATED');
     if (balEl) balEl.textContent = formatCurrency(totalSgdBalance, 'SGD');
 
-    // Render all 5 Stages from the live PostgreSQL snapshot
     renderStage1EntityAndAccounts(customer, accounts);
     renderStage2SignatoryMatrix(snapshot.signatories || []);
     renderStage3SigningRules(snapshot.signing_rules || []);
@@ -316,35 +345,27 @@
   function renderStage1EntityAndAccounts(customer, accounts) {
     const verBadge = document.getElementById('stage1MandateVersionBadge');
     if (verBadge) {
-      verBadge.textContent = `Mandate v${customer.active_mandate_version || 1} • ${customer.mandate_status || 'ACTIVE'}`;
+      verBadge.textContent = `Mandate v${customer.active_mandate_version || 1} · ${formatBankingTerm(customer.mandate_status || 'ACTIVE')}`;
     }
 
     const metaGrid = document.getElementById('stage1EntityMetaGrid');
     if (metaGrid) {
       metaGrid.innerHTML = `
         <div class="entity-meta-box">
-          <div class="meta-label">Registered Legal Entity</div>
-          <div class="meta-value">${escapeHtml(customer.company_name || '—')}</div>
-        </div>
-        <div class="entity-meta-box">
-          <div class="meta-label">ACRA UEN / Jurisdiction</div>
-          <div class="meta-value">${escapeHtml(customer.uen || '—')} (${escapeHtml(customer.incorporation_country || 'SG')})</div>
-        </div>
-        <div class="entity-meta-box">
           <div class="meta-label">Industry &amp; Segment</div>
-          <div class="meta-value">${escapeHtml(customer.industry || customer.entity_type || 'Corporate Banking')}</div>
+          <div class="meta-value">${escapeHtml(customer.industry || formatBankingTerm(customer.entity_type))}</div>
         </div>
         <div class="entity-meta-box">
-          <div class="meta-label">DBS IDEAL Corporate ID</div>
-          <div class="meta-value">${escapeHtml(customer.ideal_corp_id || customer.ideal_auth_status || 'IDEAL-ENT')}</div>
+          <div class="meta-label">Corporate Banking ID</div>
+          <div class="meta-value">${escapeHtml(customer.ideal_corp_id || 'IDEAL-CORP')}</div>
         </div>
         <div class="entity-meta-box">
           <div class="meta-label">Relationship Manager</div>
           <div class="meta-value">${escapeHtml(customer.relationship_manager || 'Institutional Banking Group')}</div>
         </div>
         <div class="entity-meta-box">
-          <div class="meta-label">Registered Office</div>
-          <div class="meta-value" style="font-size:12px;">${escapeHtml(customer.registered_address || 'Singapore')}</div>
+          <div class="meta-label">Registered Address</div>
+          <div class="meta-value">${escapeHtml(customer.registered_address || 'Singapore')}</div>
         </div>
       `;
     }
@@ -370,23 +391,23 @@
                        data-account-number="${escapeHtml(acc.account_number)}"
                        ${checked ? 'checked' : ''} />
                 <div>
-                  <div style="font-weight:800; font-size:13.5px;">${escapeHtml(acc.account_name)}</div>
-                  <div class="account-number-mono">Acct #${escapeHtml(acc.account_number)}</div>
+                  <div style="font-weight:600; font-size:14px; color:var(--text-primary);">
+                    ${escapeHtml(acc.account_name)}
+                    <span class="badge badge-slate" style="margin-left:8px; font-weight:500;">${escapeHtml(formatBankingTerm(acc.account_type))}</span>
+                  </div>
+                  <div class="account-number-mono" style="margin-top:2px;">Account No. ${escapeHtml(acc.account_number)} &middot; ${escapeHtml(acc.currency)}</div>
                 </div>
               </div>
-              <span class="badge badge-blue">${escapeHtml(acc.account_type)}</span>
             </div>
 
             <div class="account-balance-row">
               <div>
-                <div style="font-size:10.5px; color:var(--dbs-text-muted); text-transform:uppercase; font-weight:700;">Live Available Balance</div>
                 <div class="account-balance-val">${formatCurrency(bal, acc.currency)}</div>
-              </div>
-              <div style="text-align:right;">
-                <div style="font-size:10.5px; color:var(--dbs-text-muted);">SGD Equivalent</div>
-                <div style="font-family:var(--font-mono); font-size:12px; font-weight:700; color:var(--dbs-text-secondary);">
-                  ${formatCurrency(sgdBal, 'SGD')}
-                </div>
+                ${
+                  acc.currency !== 'SGD'
+                    ? `<div style="font-size:11.5px; color:var(--text-muted); margin-top:1px;">&#x2248; ${formatCurrency(sgdBal, 'SGD')}</div>`
+                    : `<div style="font-size:11.5px; color:var(--text-muted); margin-top:1px;">Available Balance</div>`
+                }
               </div>
             </div>
           </label>
@@ -481,28 +502,28 @@
                   <div class="sig-name">${escapeHtml(sig.full_name)}</div>
                   <div class="sig-role">${escapeHtml(sig.role_title)}</div>
                 </div>
-                <span class="badge ${statusBadgeClass}">${escapeHtml(sig.status || 'ACTIVE')}</span>
+                <span class="badge ${statusBadgeClass}">${escapeHtml(formatBankingTerm(sig.status || 'ACTIVE'))}</span>
               </div>
 
               <div class="sig-meta-grid">
                 <div><strong>ID:</strong> <code>${escapeHtml(nric)}</code></div>
-                <div><strong>Auth:</strong> ${escapeHtml(sig.auth_method || 'IDEAL Token')}</div>
-                <div><strong>Specimen:</strong> ${escapeHtml(specimen)}</div>
+                <div><strong>Rail:</strong> ${escapeHtml(formatBankingTerm(sig.auth_method || 'IDEAL Token'))}</div>
+                <div><strong>Specimen:</strong> ${escapeHtml(formatBankingTerm(specimen))}</div>
                 <div>
-                  ${isOcr ? '<span class="badge badge-blue" style="font-size:10px;">OCR Verified</span>' : '<span class="badge badge-slate" style="font-size:10px;">On File</span>'}
+                  ${isOcr ? '<span class="badge badge-blue" style="font-size:10px;">OCR Verified</span>' : '<span class="badge badge-green" style="font-size:10px;">Verified</span>'}
                 </div>
               </div>
 
               <div class="sig-actions-row">
-                <span style="font-size:11px; color:var(--dbs-text-muted);">${escapeHtml(sig.email || sig.phone_masked || sig.mobile_masked || '')}</span>
+                <span style="font-size:11px; color:var(--text-muted); overflow:hidden; text-overflow:ellipsis;">${escapeHtml(sig.email || sig.phone_masked || sig.mobile_masked || '')}</span>
                 ${
                   !isRevoked
                     ? `<button type="button" class="btn btn-danger-outline revoke-sig-btn"
                                data-sig-id="${escapeHtml(sig.signatory_id)}"
                                data-sig-name="${escapeHtml(sig.full_name)}">
-                         Revoke Authority
+                         Revoke
                        </button>`
-                    : `<span style="font-size:11px; color:var(--dbs-red); font-weight:700;">Revoked</span>`
+                    : `<span style="font-size:11px; color:var(--google-red); font-weight:600;">Revoked</span>`
                 }
               </div>
             </div>
@@ -1392,19 +1413,57 @@
     const stream = document.getElementById('copilotChatStream');
     if (!stream || !text) return;
 
+    // When a user message arrives, reset activeAssistantBubble so the next assistant turn gets 1 fresh bubble
+    if (role === 'user') {
+      state.activeAssistantBubble = null;
+      if (state.activeUserVoiceBubble && state.activeUserVoiceBubble.parentNode === stream && String(turnId).includes('voice')) {
+        state.activeUserVoiceBubble.innerHTML = `<div>${escapeHtml(text).replace(/\n/g, '<br/>')}</div>`;
+        stream.scrollTop = stream.scrollHeight;
+        return;
+      }
+      if (turnId && state.turnBubbleMap[turnId] && state.turnBubbleMap[turnId].parentNode === stream) {
+        state.turnBubbleMap[turnId].innerHTML = `<div>${escapeHtml(text).replace(/\n/g, '<br/>')}</div>`;
+        stream.scrollTop = stream.scrollHeight;
+        return;
+      }
+      const uDiv = document.createElement('div');
+      uDiv.className = 'chat-msg user';
+      if (turnId) {
+        uDiv.setAttribute('data-turn-id', turnId);
+        state.turnBubbleMap[turnId] = uDiv;
+      }
+      if (String(turnId).includes('voice')) {
+        state.activeUserVoiceBubble = uDiv;
+      }
+      uDiv.innerHTML = `<div>${escapeHtml(text).replace(/\n/g, '<br/>')}</div>`;
+      stream.appendChild(uDiv);
+      stream.scrollTop = stream.scrollHeight;
+      return;
+    }
+
+    // Assistant turn: STRICTLY update the single activeAssistantBubble in place!
+    state.activeUserVoiceBubble = null;
+    if (state.activeAssistantBubble && state.activeAssistantBubble.parentNode === stream) {
+      state.activeAssistantBubble.innerHTML = `<div>${escapeHtml(text).replace(/\n/g, '<br/>')}</div>`;
+      stream.scrollTop = stream.scrollHeight;
+      return;
+    }
+
     if (turnId && state.turnBubbleMap[turnId] && state.turnBubbleMap[turnId].parentNode === stream) {
       const existing = state.turnBubbleMap[turnId];
+      state.activeAssistantBubble = existing;
       existing.innerHTML = `<div>${escapeHtml(text).replace(/\n/g, '<br/>')}</div>`;
       stream.scrollTop = stream.scrollHeight;
       return;
     }
 
     const div = document.createElement('div');
-    div.className = `chat-msg ${role}`;
+    div.className = 'chat-msg assistant';
     if (turnId) {
       div.setAttribute('data-turn-id', turnId);
       state.turnBubbleMap[turnId] = div;
     }
+    state.activeAssistantBubble = div;
     div.innerHTML = `<div>${escapeHtml(text).replace(/\n/g, '<br/>')}</div>`;
     stream.appendChild(div);
     stream.scrollTop = stream.scrollHeight;
@@ -2080,5 +2139,27 @@
     await checkSystemHealth();
     await loadCustomersList();
     connectLiveWebSocket();
+    const params = new URLSearchParams(window.location.search);
+    const urlStage = params.get('stage');
+    if (urlStage) {
+      navigateToStage(Number(urlStage));
+    }
+    if (params.get('testStreaming') === '1') {
+      handleWebSocketMessage({ type: 'transcript', role: 'user', turn_id: 'u_demo_1', text: 'Hello, can you help me update our TechNova mandate?' });
+      const partials = [
+        'Hello. How',
+        'Hello. How can',
+        'Hello. How can I assist',
+        'Hello. How can I assist you with',
+        'Hello. How can I assist you with the mandate',
+        'Hello. How can I assist you with the mandate changes',
+        'Hello. How can I assist you with the mandate changes for TechNova',
+        'Hello. How can I assist you with the mandate changes for TechNova Solutions?'
+      ];
+      partials.forEach((p) => {
+        handleWebSocketMessage({ type: 'output_transcript', role: 'assistant', turn_id: 'v_turn_1', text: p });
+      });
+      handleWebSocketMessage({ type: 'transcript', role: 'assistant', turn_id: 'v_turn_1', text: partials[partials.length - 1] });
+    }
   });
 })();
