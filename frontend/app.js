@@ -1356,12 +1356,30 @@
       }
 
       case 'interrupted': {
-        clearAudioPlaybackQueueOnly();
+        clearAudioPlaybackQueueOnly(true);
         break;
       }
 
       case 'audio_out':
       case 'audio_output': {
+        const turnId = msg.turn_id || 'default_turn';
+        if (!state.interruptedTurnIds) state.interruptedTurnIds = new Set();
+        // If this turn was barged-in by the user, or if we are in the post-barge-in cooldown
+        // for the same turn, drop stale in-flight audio packets so Joy stops immediately.
+        if (state.interruptedTurnIds.has(turnId)) {
+          break;
+        }
+        if (
+          state.muteIncomingAudioUntil &&
+          Date.now() < state.muteIncomingAudioUntil &&
+          turnId === state.currentAudioTurnId
+        ) {
+          break;
+        }
+        if (turnId !== state.currentAudioTurnId) {
+          state.currentAudioTurnId = turnId;
+          state.muteIncomingAudioUntil = 0;
+        }
         if (typeof stopPhoneRinger === 'function') stopPhoneRinger(true);
         const b64 = msg.pcm24_base64 || msg.data;
         const rate = Number(msg.sample_rate || 24000);
@@ -1383,6 +1401,9 @@
           const role = msg.role === 'user' ? 'user' : 'assistant';
           if (role === 'assistant' && typeof stopPhoneRinger === 'function') {
             stopPhoneRinger(true);
+          }
+          if (role === 'user') {
+            detectAndApplyClientTabSwitch(msg.text);
           }
           const turnId = msg.turn_id || `${role}_latest`;
           upsertTurnMessage(turnId, role, msg.text);
@@ -1409,6 +1430,11 @@
           if (!low || noiseFillers.has(low) || alphaCount < 3) {
             break;
           }
+          // If the user speaks while Joy is speaking, stop Joy's playback immediately
+          if (state.activePlaybackNodes.length > 0) {
+            clearAudioPlaybackQueueOnly(true);
+          }
+          detectAndApplyClientTabSwitch(asciiClean);
           const turnId = msg.turn_id || 'voice_user_latest';
           upsertTurnMessage(turnId, 'user', `🎤 ${asciiClean}`);
         }
@@ -1420,6 +1446,30 @@
     }
   }
 
+  function detectAndApplyClientTabSwitch(rawText) {
+    const txt = String(rawText || '').trim();
+    if (!txt) return false;
+    const hasNavVerb = /\b(switch|go|open|navigate|move|return|back|show|take\s+me|view|change\s+tab|select\s+tab)\b/i.test(txt);
+    if (!hasNavVerb) return false;
+    if (/\b(fx|foreign\s+exchange|hedg(?:e|ing)|forward\s+tab|pricing\s+tab|tab\s*3|use\s*case\s*3)\b/i.test(txt)) {
+      switchSlideDeckUseCase('UC3_FX');
+      return true;
+    }
+    if (/\b(payment(?:s)?|bec\b|fraud\s+shield|invoice\s+tab|rail\s+tab|tab\s*2|use\s*case\s*2)\b/i.test(txt)) {
+      switchSlideDeckUseCase('UC2_PAYMENT');
+      return true;
+    }
+    if (/\b(mandate|signator(?:y|ies)|signing\s+rules|board\s+resolution|digisign|tab\s*1|use\s*case\s*1|stage\s*[1-5])\b/i.test(txt)) {
+      switchSlideDeckUseCase('UC1_MANDATE');
+      const mStage = txt.match(/\bstage\s*([1-5])\b/i);
+      if (mStage) {
+        navigateToStage(Number(mStage[1]), false);
+      }
+      return true;
+    }
+    return false;
+  }
+
   function switchSlideDeckUseCase(usecaseId) {
     const uc = String(usecaseId || 'UC1_MANDATE').toUpperCase();
     state.activeUseCase = uc;
@@ -1429,8 +1479,10 @@
     if (p1) p1.style.display = uc === 'UC1_MANDATE' ? 'block' : 'none';
     if (p2) p2.style.display = uc === 'UC2_PAYMENT' ? 'block' : 'none';
     if (p3) p3.style.display = uc === 'UC3_FX' ? 'block' : 'none';
-    // Re-hydrate the FX chart on tab-back; the host div is otherwise left showing the
-    // "awaiting quote" placeholder even though a real hedge was already booked.
+    // Re-hydrate UC2 / UC3 canvases on tab-back if already executed in this session
+    if (uc === 'UC2_PAYMENT' && state.lastPaymentPrepCard) {
+      renderUc2PaymentPrepPanel(state.lastPaymentPrepCard);
+    }
     if (uc === 'UC3_FX' && state.lastFxHedgeCard) {
       renderUc3FxAdvisoryPanel(state.lastFxHedgeCard);
     }
@@ -1445,57 +1497,311 @@
     });
   }
 
+  function resetUc2PaymentPrepPanel() {
+    state.lastPaymentPrepCard = null;
+    const statusBadge = document.getElementById('uc2StatusBadge');
+    const standbyBanner = document.getElementById('uc2StandbyBanner');
+    const resetBtn = document.getElementById('resetUc2CanvasBtn');
+    const cardWrap = document.getElementById('uc2InvoiceCardContainer');
+    const hdrLabel = document.getElementById('uc2InvoiceHeaderLabel');
+    const benEl = document.getElementById('uc2BeneficiaryVal');
+    const accWrap = document.getElementById('uc2AccountBoxWrap');
+    const accEl = document.getElementById('uc2AccountNoVal');
+    const amtWrap = document.getElementById('uc2AmountBoxWrap');
+    const amtLabel = document.getElementById('uc2AmountLabel');
+    const amtEl = document.getElementById('uc2AmountVal');
+    const dueEl = document.getElementById('uc2DueDateVal');
+    const secPill = document.getElementById('uc2SecurityStatePill');
+    const vBox = document.getElementById('uc2StateVerifiedBox');
+    const bBox = document.getElementById('uc2StateBecBox');
+    const railPill = document.getElementById('uc2RailStatePill');
+    const fastBox = document.getElementById('uc2RailFastBox');
+    const fastLbl = document.getElementById('uc2RailFastLabel');
+    const mepsBox = document.getElementById('uc2RailMepsBox');
+    const stageBtn = document.getElementById('stagePaymentIdealBtn');
+
+    if (statusBadge) {
+      statusBadge.className = 'badge';
+      statusBadge.style.cssText = 'background:#F3F4F6; color:#4B5563; border:1px solid #D1D5DB;';
+      statusBadge.textContent = 'Standby · Awaiting Invoice Instruction';
+    }
+    if (standbyBanner) standbyBanner.style.display = 'flex';
+    if (resetBtn) resetBtn.style.display = 'none';
+    if (cardWrap) {
+      cardWrap.style.border = '1.5px dashed #D1D5DB';
+      cardWrap.style.background = '#F9FAFB';
+    }
+    if (hdrLabel) {
+      hdrLabel.style.color = '#6B7280';
+      hdrLabel.textContent = 'Invoice Queue · Awaiting Multimodal OCR';
+    }
+    if (benEl) {
+      benEl.style.color = '#9CA3AF';
+      benEl.textContent = '— Awaiting invoice extraction —';
+    }
+    if (accWrap) {
+      accWrap.style.background = '#FFFFFF';
+      accWrap.style.border = '1px solid #E5E7EB';
+    }
+    if (accEl) {
+      accEl.style.color = '#9CA3AF';
+      accEl.textContent = '— Pending whitelist screening —';
+    }
+    if (amtWrap) {
+      amtWrap.style.background = '#FFFFFF';
+      amtWrap.style.border = '1px solid #E5E7EB';
+    }
+    if (amtLabel) {
+      amtLabel.style.color = '#6B7280';
+      amtLabel.textContent = 'Amount (Zero Transpose Risk Check)';
+    }
+    if (amtEl) {
+      amtEl.style.color = '#9CA3AF';
+      amtEl.textContent = '— Pending extraction —';
+    }
+    if (dueEl) {
+      dueEl.style.color = '#9CA3AF';
+      dueEl.textContent = '—';
+    }
+    if (secPill) {
+      secPill.style.background = '#F3F4F6';
+      secPill.style.color = '#6B7280';
+      secPill.textContent = 'STANDBY';
+    }
+    if (vBox) {
+      vBox.style.cssText = 'background:#F3F4F6; color:#4B5563; border:1px solid #E5E7EB; border-radius:8px; padding:10px 14px; font-weight:600; font-size:13px; margin-bottom:6px; opacity:0.5; transition:all 0.25s ease;';
+    }
+    if (bBox) {
+      bBox.style.cssText = 'background:#F9FAFB; color:#6B7280; border:1px solid #E5E7EB; border-radius:8px; padding:10px 14px; font-weight:600; font-size:12.5px; margin-bottom:6px; opacity:0.45; transition:all 0.25s ease;';
+    }
+    if (railPill) {
+      railPill.style.background = '#F3F4F6';
+      railPill.style.color = '#6B7280';
+      railPill.textContent = 'STANDBY';
+    }
+    if (fastBox) {
+      fastBox.style.cssText = 'background:#F3F4F6; color:#4B5563; border:1px solid #E5E7EB; border-radius:8px; padding:10px 14px; display:flex; justify-content:space-between; align-items:center; font-weight:600; font-size:13px; margin-bottom:6px; opacity:0.55; transition:all 0.25s ease;';
+    }
+    if (fastLbl) fastLbl.textContent = 'FAST (Evaluating Threshold ≤ SGD 200,000)';
+    if (mepsBox) {
+      mepsBox.style.cssText = 'background:#F9FAFB; color:#6B7280; border:1px solid #E5E7EB; border-radius:8px; padding:8px 14px; display:flex; justify-content:space-between; align-items:center; font-weight:600; font-size:12.5px; opacity:0.45; transition:all 0.25s ease;';
+    }
+    if (stageBtn) {
+      stageBtn.style.background = '#E31837';
+      stageBtn.style.borderColor = '#E31837';
+      stageBtn.innerHTML = 'Verify Invoice &amp; Stage Payment in Native IDEAL &rarr;';
+    }
+  }
+
+  function renderUc2PaymentPrepPanel(pc) {
+    if (!pc) return;
+    state.lastPaymentPrepCard = pc;
+    const isBec = Boolean(pc.is_bec_fraud_flagged);
+    const beneficiary = pc.beneficiary || 'SingaTech Industrial';
+    const acct = pc.extracted_account_no || (isBec ? '017-482910-8' : '003-918239-1');
+    const ccy = pc.currency || 'SGD';
+    const amt = Number(pc.amount_sgd != null ? pc.amount_sgd : 14250);
+    const due = pc.due_date || '28 Aug 2026';
+    const invRef = pc.invoice_ref || 'INV-2026-889';
+    const recRail = String(pc.recommended_rail || 'FAST').toUpperCase();
+    const stagingRef = pc.staging_ref || 'FT262359902';
+
+    const statusBadge = document.getElementById('uc2StatusBadge');
+    const standbyBanner = document.getElementById('uc2StandbyBanner');
+    const resetBtn = document.getElementById('resetUc2CanvasBtn');
+    const cardWrap = document.getElementById('uc2InvoiceCardContainer');
+    const hdrLabel = document.getElementById('uc2InvoiceHeaderLabel');
+    const benEl = document.getElementById('uc2BeneficiaryVal');
+    const accWrap = document.getElementById('uc2AccountBoxWrap');
+    const accEl = document.getElementById('uc2AccountNoVal');
+    const amtWrap = document.getElementById('uc2AmountBoxWrap');
+    const amtLabel = document.getElementById('uc2AmountLabel');
+    const amtEl = document.getElementById('uc2AmountVal');
+    const dueEl = document.getElementById('uc2DueDateVal');
+    const secPill = document.getElementById('uc2SecurityStatePill');
+    const vBox = document.getElementById('uc2StateVerifiedBox');
+    const bBox = document.getElementById('uc2StateBecBox');
+    const railPill = document.getElementById('uc2RailStatePill');
+    const fastBox = document.getElementById('uc2RailFastBox');
+    const fastLbl = document.getElementById('uc2RailFastLabel');
+    const mepsBox = document.getElementById('uc2RailMepsBox');
+    const stageBtn = document.getElementById('stagePaymentIdealBtn');
+
+    if (standbyBanner) standbyBanner.style.display = 'none';
+    if (resetBtn) resetBtn.style.display = 'inline-flex';
+    if (statusBadge) {
+      statusBadge.className = isBec ? 'badge' : 'badge badge-green';
+      statusBadge.style.cssText = isBec
+        ? 'background:#FEF3C7; color:#92400E; border:1px solid #F59E0B; font-weight:700;'
+        : '';
+      statusBadge.textContent = isBec
+        ? '⚠️ BEC Account Mismatch Flagged · Step-Up Required'
+        : '✓ 100% Multimodal OCR Extraction · Whitelist Verified';
+    }
+    if (cardWrap) {
+      cardWrap.style.border = isBec ? '1.5px solid #F59E0B' : '1.5px solid #059669';
+      cardWrap.style.background = isBec ? '#FFFBEB' : '#F9FAFB';
+    }
+    if (hdrLabel) {
+      hdrLabel.style.color = isBec ? '#92400E' : '#065F46';
+      hdrLabel.textContent = `Extracted Invoice · ${invRef} (${isBec ? 'BEC Alert' : 'Verified'})`;
+    }
+    if (benEl) {
+      benEl.style.color = '#111827';
+      benEl.style.fontWeight = '700';
+      benEl.textContent = beneficiary;
+    }
+    if (accWrap) {
+      accWrap.style.background = isBec ? '#FEF3C7' : '#FFFFFF';
+      accWrap.style.border = isBec ? '1.5px solid #F59E0B' : '1px solid #E5E7EB';
+    }
+    if (accEl) {
+      accEl.style.color = isBec ? '#92400E' : '#111827';
+      accEl.style.fontWeight = '700';
+      accEl.textContent = acct;
+    }
+    if (amtWrap) {
+      amtWrap.style.background = '#ECFDF5';
+      amtWrap.style.border = '1.5px solid #059669';
+    }
+    if (amtLabel) {
+      amtLabel.style.color = '#065F46';
+      amtLabel.textContent = 'Amount (Verified Zero Transpose Risk)';
+    }
+    if (amtEl) {
+      amtEl.style.color = '#059669';
+      amtEl.textContent = formatMoneyCode(amt, ccy, 2);
+    }
+    if (dueEl) {
+      dueEl.style.color = '#111827';
+      dueEl.textContent = due;
+    }
+    if (secPill) {
+      secPill.style.background = isBec ? '#FEF3C7' : '#ECFDF5';
+      secPill.style.color = isBec ? '#92400E' : '#065F46';
+      secPill.textContent = isBec ? 'BEC MISMATCH ALERT' : 'VERIFIED PAYEE';
+    }
+    if (vBox && bBox) {
+      if (isBec) {
+        vBox.style.cssText = 'background:#F3F4F6; color:#6B7280; border:1px solid #E5E7EB; border-radius:8px; padding:10px 14px; font-weight:600; font-size:13px; margin-bottom:6px; opacity:0.4; transition:all 0.25s ease;';
+        bBox.style.cssText = 'background:#FEF3C7; color:#92400E; border:2px solid #F59E0B; border-radius:8px; padding:10px 14px; font-weight:700; font-size:12.5px; margin-bottom:6px; opacity:1; box-shadow:0 4px 12px rgba(245,158,11,0.18); transition:all 0.25s ease;';
+      } else {
+        vBox.style.cssText = 'background:#059669; color:#FFFFFF; border:1.5px solid #047857; border-radius:8px; padding:10px 14px; font-weight:700; font-size:13px; margin-bottom:6px; opacity:1; box-shadow:0 4px 12px rgba(5,150,105,0.2); transition:all 0.25s ease;';
+        bBox.style.cssText = 'background:#F9FAFB; color:#6B7280; border:1px solid #E5E7EB; border-radius:8px; padding:10px 14px; font-weight:600; font-size:12.5px; margin-bottom:6px; opacity:0.4; transition:all 0.25s ease;';
+      }
+    }
+    if (railPill) {
+      railPill.style.background = '#ECFDF5';
+      railPill.style.color = '#065F46';
+      railPill.textContent = `${recRail} SELECTED ($0 FEE)`;
+    }
+    const isFast = recRail === 'FAST';
+    if (fastBox && mepsBox) {
+      fastBox.style.cssText = isFast
+        ? 'background:#059669; color:#FFFFFF; border:1.5px solid #047857; border-radius:8px; padding:10px 14px; display:flex; justify-content:space-between; align-items:center; font-weight:700; font-size:13px; margin-bottom:6px; opacity:1; transition:all 0.25s ease;'
+        : 'background:#F3F4F6; color:#374151; border-radius:8px; padding:8px 14px; display:flex; justify-content:space-between; align-items:center; font-weight:600; font-size:12.5px; opacity:0.5;';
+      mepsBox.style.cssText = !isFast
+        ? 'background:#059669; color:#FFFFFF; border:1.5px solid #047857; border-radius:8px; padding:10px 14px; display:flex; justify-content:space-between; align-items:center; font-weight:700; font-size:13px; opacity:1; transition:all 0.25s ease;'
+        : 'background:#F3F4F6; color:#374151; border-radius:8px; padding:8px 14px; display:flex; justify-content:space-between; align-items:center; font-weight:600; font-size:12.5px; opacity:0.55;';
+    }
+    if (fastLbl) fastLbl.textContent = isFast ? '✓ FAST (Recommended Path)' : 'FAST';
+    if (stageBtn) {
+      stageBtn.style.background = isBec ? '#D97706' : '#059669';
+      stageBtn.style.borderColor = isBec ? '#D97706' : '#059669';
+      stageBtn.innerHTML = isBec
+        ? `⚠️ Held for Step-Up Verification &middot; Ref ${escapeHtml(stagingRef)}`
+        : `&#x2713; Staged in Native IDEAL &middot; Ref ${escapeHtml(stagingRef)} (Ready for 2FA Sign-Off)`;
+    }
+  }
+
   async function handleUiSync(syncPayload) {
     if (!syncPayload) return;
 
+    const uiAct = String(syncPayload.ui_action || '').toUpperCase();
+    const isExplicitMandateAction = [
+      'SWITCH_WORKSPACE_TAB',
+      'ADD_SIGNATORY',
+      'REVOKE_SIGNATORY',
+      'CONFIGURE_RULES',
+      'SIMULATE_AUTH',
+      'AUDIT_RESOLUTION',
+      'SUBMIT_MANDATE',
+      'EXECUTE_COSIGN',
+      'UPDATE_TARGET_ACCOUNTS',
+    ].includes(uiAct);
+
     if (syncPayload.target_usecase) {
       switchSlideDeckUseCase(syncPayload.target_usecase);
-    } else if (syncPayload.ui_action === 'STAGE_PAYMENT_TO_IDEAL') {
+    } else if (uiAct === 'STAGE_PAYMENT_TO_IDEAL') {
       switchSlideDeckUseCase('UC2_PAYMENT');
-    } else if (syncPayload.ui_action === 'FX_HEDGE_EXECUTED') {
+    } else if (uiAct === 'FX_HEDGE_EXECUTED') {
       switchSlideDeckUseCase('UC3_FX');
-    } else if (syncPayload.target_stage) {
+    } else if (syncPayload.target_stage && (isExplicitMandateAction || Number(syncPayload.target_stage) > 1)) {
       switchSlideDeckUseCase('UC1_MANDATE');
     }
 
     if (syncPayload.payment_prep_card) {
-      const pc = syncPayload.payment_prep_card;
-      const accEl = document.getElementById('uc2AccountNoVal');
-      const vBox = document.getElementById('uc2StateVerifiedBox');
-      const bBox = document.getElementById('uc2StateBecBox');
-      if (accEl) accEl.textContent = pc.extracted_account_no || '003-918239-1';
-      if (vBox && bBox) {
-        vBox.style.opacity = pc.is_bec_fraud_flagged ? '0.45' : '1';
-        bBox.style.opacity = pc.is_bec_fraud_flagged ? '1' : '0.45';
-      }
+      renderUc2PaymentPrepPanel(syncPayload.payment_prep_card);
     }
 
     if (syncPayload.fx_hedge_card) {
       const fx = syncPayload.fx_hedge_card;
       renderUc3FxAdvisoryPanel(fx);
 
-      // Right-hand pre-trade widget: these were static literals in index.html, so the booked
-      // trade and the displayed trade could disagree.
       const buyEl = document.getElementById('uc3YouBuyVal');
       const mathEl = document.getElementById('uc3HedgeMathVal');
       const tenorEl = document.getElementById('uc3TenorRateVal');
       const contractEl = document.getElementById('uc3ContractIdVal');
       const badgeEl = document.getElementById('uc3PretradeBadge');
+      const rightBadgeEl = document.getElementById('uc3RightPretradeBadge');
+      const confirmCard = document.getElementById('uc3TradeConfirmationCard');
+      const confirmTitle = document.getElementById('uc3TradeConfirmTitle');
+      const bookedBadge = document.getElementById('uc3BookedBadge');
       const ratio = Number(fx.hedge_ratio_pct) || 0;
       const payable = Number(fx.total_payable_usd) || 0;
       const buy = Number(fx.you_buy_usd) || 0;
       const fwd = Number(fx.forward_90d_rate);
-      if (buyEl) buyEl.textContent = formatMoneyCode(buy, 'USD');
+      if (buyEl) {
+        buyEl.style.color = '#111827';
+        buyEl.textContent = formatMoneyCode(buy, 'USD');
+      }
       if (mathEl) {
+        mathEl.style.color = '#111827';
+        mathEl.style.borderStyle = 'solid';
         mathEl.innerHTML = `${escapeHtml((ratio / 100).toFixed(2))} &times; ${escapeHtml(formatMoneyCode(payable, 'USD'))} = <strong>${escapeHtml(formatMoneyCode(buy, 'USD'))}</strong>`;
       }
       if (tenorEl) {
+        tenorEl.style.color = '#E31837';
         tenorEl.textContent = `${fx.tenor || '3M'} @ ${isFinite(fwd) ? fwd.toFixed(4) : '--'}`;
       }
       if (contractEl) {
+        contractEl.style.color = '#047857';
+        contractEl.style.fontWeight = '700';
         contractEl.textContent = `Contract ID: ${fx.contract_id || '--'}${fx.booked ? ' \u2713' : ''}`;
       }
-      if (badgeEl) badgeEl.textContent = `Pre-Trade Checks: ${fx.pretrade_checks || 'PENDING'}`;
+      if (confirmCard && fx.booked) {
+        confirmCard.style.border = '1.5px solid #059669';
+        confirmCard.style.background = '#ECFDF5';
+      }
+      if (confirmTitle && fx.booked) {
+        confirmTitle.style.color = '#065F46';
+        confirmTitle.textContent = 'FX Trade Confirmation · Verified';
+      }
+      if (bookedBadge && fx.booked) {
+        bookedBadge.className = 'badge badge-green';
+        bookedBadge.style.cssText = '';
+        bookedBadge.textContent = 'Booked';
+      }
+      if (badgeEl) {
+        badgeEl.className = 'badge badge-green';
+        badgeEl.style.cssText = '';
+        badgeEl.textContent = `Pre-Trade Checks: ${fx.pretrade_checks || 'PASSED'}`;
+      }
+      if (rightBadgeEl) {
+        rightBadgeEl.className = 'badge badge-green';
+        rightBadgeEl.style.cssText = '';
+        rightBadgeEl.textContent = `Pre-Trade Checks: ${fx.pretrade_checks || 'PASSED'}`;
+      }
     }
 
     const updatedProfileId = syncPayload.updated_profile_id || syncPayload.active_profile_id || syncPayload.customer_id;
@@ -2566,28 +2872,45 @@
       const handleFloat32Frame = (input) => {
         if (!state.isRecordingVoice) return;
 
-        // CRITICAL: the stream to Gemini Live must be CONTINUOUS.
-        //
-        // Server-side automatic VAD decides the user's turn is over by observing the
-        // silence that FOLLOWS their speech. If the browser simply stops transmitting
-        // when the room goes quiet, the server never sees that trailing silence, never
-        // closes the turn, and the model never answers -- Joy greets you and then
-        // appears deaf forever, with no error raised anywhere.
-        //
-        // Verified empirically against models/gemini-3.8-live-extended-thinking:
-        //   stop sending after speech -> SILENT
-        //   audio_stream_end=True     -> SILENT
-        //   keep streaming silence    -> RESPONDS
-        //
-        // So we NEVER drop a frame. During the mute / ringer / greeting / echo-tail
-        // windows we transmit digital silence instead, which keeps VAD fed while still
-        // preventing Joy from hearing herself or the ringer.
+        // 1. Measure raw mic energy FIRST (WebRTC echoCancellation: true is active on the stream).
+        let rawSum = 0;
+        for (let i = 0; i < input.length; i++) {
+          rawSum += Math.abs(input[i]);
+        }
+        const rawAvgAbs = rawSum / Math.max(1, input.length);
+
+        // 2. VOICE BARGE-IN: If Joy is currently speaking (or in greeting) and the user speaks
+        //    into the microphone (rawAvgAbs >= 0.020 for 2 frames or >= 0.032 spike), immediately
+        //    stop Joy's playback queue, notify the backend, and stream the user's voice through!
+        const joyCurrentlySpeaking =
+          state.activePlaybackNodes.length > 0 || state.isGreetingInProgress;
+        if (joyCurrentlySpeaking && !state.isVoiceMuted && !state.isRinging) {
+          if (rawAvgAbs >= 0.020) {
+            state.bargeInVoiceFrames = (state.bargeInVoiceFrames || 0) + 1;
+          } else {
+            state.bargeInVoiceFrames = 0;
+          }
+          if (rawAvgAbs >= 0.032 || state.bargeInVoiceFrames >= 2) {
+            state.bargeInVoiceFrames = 0;
+            state.isGreetingInProgress = false;
+            state.lastPlaybackEndTime = 0;
+            triggerBargeInInterruption();
+          }
+        } else {
+          state.bargeInVoiceFrames = 0;
+        }
+
+        // 3. CRITICAL: Keep the 16kHz stream to Gemini Live CONTINUOUS so server-side automatic
+        //    VAD always observes the trailing silence after speech and closes the user's turn.
+        //    Only substitute digital silence during mute, ringer, or low-level speaker bleed
+        //    when the user is NOT barging in.
         const suppressAudio =
           state.isVoiceMuted ||
           state.isRinging ||
-          state.isGreetingInProgress ||
-          state.activePlaybackNodes.length > 0 ||
-          Date.now() - (state.lastPlaybackEndTime || 0) < 650;
+          ((state.isGreetingInProgress ||
+            state.activePlaybackNodes.length > 0 ||
+            Date.now() - (state.lastPlaybackEndTime || 0) < 350) &&
+            rawAvgAbs < 0.020);
 
         let sum = 0;
         const pcm16 = new Int16Array(input.length);
@@ -2845,10 +3168,19 @@
     }
   }
 
-  function clearAudioPlaybackQueueOnly() {
+  function clearAudioPlaybackQueueOnly(markTurnInterrupted = true) {
+    if (markTurnInterrupted) {
+      if (!state.interruptedTurnIds) state.interruptedTurnIds = new Set();
+      if (state.currentAudioTurnId) {
+        state.interruptedTurnIds.add(state.currentAudioTurnId);
+      }
+      state.muteIncomingAudioUntil = Date.now() + 850;
+      state.isGreetingInProgress = false;
+    }
     state.activePlaybackNodes.forEach((node) => {
       try {
         node.stop();
+        node.disconnect();
       } catch (_) {}
     });
     state.activePlaybackNodes = [];
@@ -2863,7 +3195,7 @@
   }
 
   function triggerBargeInInterruption() {
-    clearAudioPlaybackQueueOnly();
+    clearAudioPlaybackQueueOnly(true);
     if (state.ws && state.ws.readyState === WebSocket.OPEN) {
       state.ws.send(JSON.stringify({ type: 'barge_in' }));
     }
@@ -2885,6 +3217,14 @@
     const stagePayBtn = document.getElementById('stagePaymentIdealBtn');
     if (stagePayBtn) {
       stagePayBtn.addEventListener('click', () => triggerUc2PaymentPrepFlow(false));
+    }
+    const quickExtractBtn = document.getElementById('quickExtractInvoiceBtn');
+    if (quickExtractBtn) {
+      quickExtractBtn.addEventListener('click', () => triggerUc2PaymentPrepFlow(false));
+    }
+    const resetUc2Btn = document.getElementById('resetUc2CanvasBtn');
+    if (resetUc2Btn) {
+      resetUc2Btn.addEventListener('click', () => resetUc2PaymentPrepPanel());
     }
     const becSimBtn = document.getElementById('toggleBecFraudSimBtn');
     if (becSimBtn) {

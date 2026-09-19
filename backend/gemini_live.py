@@ -349,11 +349,52 @@ def build_system_instruction(customer_id: str = "CUST-001", current_stage: int =
         "'200k uncertainty', or 'book a forward for 70% of my total payable'), call `run_fx_pretrade_checks` or "
         "`book_fx_forward_contract` "
         "(`0.70 * USD 5M = USD 3,500,000`, `Spot 1.2800`, `90D Forward 1.3538`, `SGD 200,000 VaR`, `Contract CF03943335-01`).\n"
-        "4. GOVERNANCE QUORUM RULE: ONLY Group A requires a minimum of 1 active signatory (`GOVERNANCE_VIOLATION_SOLE_GROUP_A`). "
+        "4. TAB & VIEW SWITCHING (`switch_workspace_tab`): Whenever the user asks to switch tabs, screens, or views "
+        "(e.g. 'switch to FX', 'go to the payment tab', 'show me BEC shield', 'go back to change of mandate', 'open stage 3'), "
+        "ALWAYS call `switch_workspace_tab(tab_name=...)` with `'UC1_MANDATE'`, `'UC2_PAYMENT'`, or `'UC3_FX'`.\n"
+        "5. GOVERNANCE QUORUM RULE: ONLY Group A requires a minimum of 1 active signatory (`GOVERNANCE_VIOLATION_SOLE_GROUP_A`). "
         "Group B and Group C signatories (such as Kenneth Yap in Group C) can ALWAYS be revoked.\n"
-        "5. CONCISE iCHAT + A2UI STYLE: Keep your text/voice reply to 1–2 short, natural sentences because the UI "
+        "6. CONCISE iCHAT + A2UI STYLE: Keep your text/voice reply to 1–2 short, natural sentences because the UI "
         "renders interactive A2UI visual cards and SVG charts for every tool call."
     )
+
+
+def _detect_tab_switch_intent(text: str, customer_id: str = "CUST-001") -> dict[str, Any] | None:
+    """Detect explicit user requests to switch workspace tabs using strict word-boundary regexes."""
+    import re
+    from backend.tools import switch_workspace_tab
+
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return None
+
+    # Require an explicit navigation verb + target tab noun so general questions aren't hijacked
+    has_nav_verb = bool(
+        re.search(
+            r"\b(switch|go|open|navigate|move|return|back|show|take\s+me|view|change\s+tab|select\s+tab)\b",
+            cleaned,
+            re.IGNORECASE,
+        )
+    )
+    if not has_nav_verb:
+        return None
+
+    # Do not intercept action requests that already have dedicated action tools (e.g. "prepare an invoice payment", "book a 70% forward")
+    if re.search(r"\b(prepare|book|execute|revoke|remove|delete|add|upload|simulate|audit|submit)\b", cleaned, re.IGNORECASE):
+        return None
+
+    if re.search(r"\b(fx|foreign\s+exchange|hedg(?:e|ing)|forward\s+tab|pricing\s+tab|tab\s*3|use\s*case\s*3)\b", cleaned, re.IGNORECASE):
+        return switch_workspace_tab(tab_name="UC3_FX", customer_id=customer_id)
+
+    if re.search(r"\b(payment(?:s)?|bec\b|fraud\s+shield|invoice\s+tab|rail\s+tab|tab\s*2|use\s*case\s*2)\b", cleaned, re.IGNORECASE):
+        return switch_workspace_tab(tab_name="UC2_PAYMENT", customer_id=customer_id)
+
+    if re.search(r"\b(mandate|signator(?:y|ies)|signing\s+rules|board\s+resolution|digisign|tab\s*1|use\s*case\s*1|stage\s*[1-5])\b", cleaned, re.IGNORECASE):
+        m_stage = re.search(r"\bstage\s*([1-5])\b", cleaned, re.IGNORECASE)
+        st = int(m_stage.group(1)) if m_stage else 1
+        return switch_workspace_tab(tab_name=cleaned, stage=st, customer_id=customer_id)
+
+    return None
 
 
 def _is_bridgeable_credential_error(exc: BaseException) -> bool:
@@ -652,6 +693,25 @@ async def run_agent_chat_turn(
             f"Completed `{last_tool['tool_name']}` against PostgreSQL for {active_cid}."
         )
 
+    if latest_ui_sync is None:
+        tab_switch_res = await asyncio.to_thread(_detect_tab_switch_intent, message, active_cid)
+        if tab_switch_res and tab_switch_res.get("ui_sync"):
+            latest_ui_sync = tab_switch_res["ui_sync"]
+            ui_sync_events.append(latest_ui_sync)
+            tc_entry = {
+                "call_id": "call_tab_switch_auto",
+                "tool_name": "switch_workspace_tab",
+                "args": {"tab_name": message, "customer_id": active_cid},
+                "result": {k: v for k, v in tab_switch_res.items() if k not in ("workspace_snapshot", "ui_sync")},
+                "ui_sync": latest_ui_sync,
+            }
+            tool_calls_log.append(tc_entry)
+            if event_callback:
+                await event_callback({"type": "tool_call_result", **tc_entry})
+                await event_callback(latest_ui_sync)
+            if not reply_text:
+                reply_text = f"Certainly. I have switched the workspace view to {tab_switch_res.get('tab_label', 'the requested tab')}."
+
     if latest_ui_sync and latest_ui_sync.get("workspace_snapshot"):
         workspace_snapshot = latest_ui_sync["workspace_snapshot"]
     else:
@@ -683,16 +743,7 @@ async def synthesize_live_voice_response(
     customer_id: str,
     send_json: Callable[[dict[str, Any]], Awaitable[None]],
 ) -> None:
-    """Read `prompt_text` aloud verbatim as 24kHz PCM via `gemini-live-2.5-flash-native-audio`.
-
-    `prompt_text` is text Joy has ALREADY composed, so this must behave as a narrator, not as a
-    conversational agent. The previous system instruction ("State the answer once...") made the
-    model treat Joy's own reply as a question from the user and answer it — the same defect that
-    caused the model to speak the customer's side of the call.
-
-    Note: `customer_id` is accepted for call-site symmetry but intentionally unused; narration
-    must not be conditioned on profile context.
-    """
+    """Read `prompt_text` aloud verbatim as 24kHz PCM via `gemini-live-2.5-flash-native-audio`."""
     del customer_id  # Narration is context-free by design.
 
     await speak_verbatim_as_joy(prompt_text, send_json)
@@ -707,13 +758,10 @@ JOY_GREETING_TEXT = (
 async def speak_verbatim_as_joy(
     text_to_speak: str,
     send_json: Callable[[dict[str, Any]], Awaitable[None]],
+    interrupt_event: asyncio.Event | None = None,
+    turn_id: str | None = None,
 ) -> bool:
-    """Read `text_to_speak` aloud VERBATIM as Joy (no improvisation, no customer role-play).
-
-    The main conversational live session is primed with mandate/payment/FX demo scripts, which caused
-    the native-audio model to improvise a customer line ("Hey Joy, I need to change my supplier...").
-    This dedicated narration session has a single job: speak the given sentence as the banker.
-    """
+    """Read `text_to_speak` aloud VERBATIM as Joy (aborting immediately if `interrupt_event` is set)."""
     clients = get_genai_clients()
     narration_sys = types.Content(
         parts=[
@@ -729,8 +777,6 @@ async def speak_verbatim_as_joy(
         ]
     )
 
-    # Prefer AI Studio (`gemini-3.8-live` per Get_started_LiveAPI.py, then `models/gemini-3.8-live-extended-thinking`)
-    # backed by Google Cloud Secret Manager; fall back to Vertex us-central1 if needed.
     candidates = [
         ("ai_studio_38_live", clients.get("api_key_client"), "gemini-3.8-live", False),
         ("ai_studio", clients.get("api_key_live_alpha"), LOGICAL_MODEL_ID, True),
@@ -759,12 +805,18 @@ async def speak_verbatim_as_joy(
                     turn_complete=True,
                 )
                 async for msg in session.receive():
+                    if interrupt_event is not None and interrupt_event.is_set():
+                        logger.info("Verbatim narration interrupted by user barge-in after %d chunks.", seq)
+                        await send_json({"type": "interrupted", "reason": "user_barge_in"})
+                        return True
                     sc = getattr(msg, "server_content", None)
                     if not sc:
                         continue
                     mt = getattr(sc, "model_turn", None)
                     if mt and mt.parts:
                         for part in mt.parts:
+                            if interrupt_event is not None and interrupt_event.is_set():
+                                break
                             inline = getattr(part, "inline_data", None)
                             if inline and inline.data:
                                 seq += 1
@@ -773,6 +825,7 @@ async def speak_verbatim_as_joy(
                                     {
                                         "type": "audio_out",
                                         "seq": seq,
+                                        "turn_id": turn_id or "joy_verbatim",
                                         "pcm24_base64": b64_pcm,
                                         "data": b64_pcm,
                                         "sample_rate": 24000,
@@ -802,6 +855,9 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
     live_session: Any = None
     live_receive_task: asyncio.Task[Any] | None = None
     turn_counter = 0
+    interrupt_event = asyncio.Event()
+    barge_in_discard_until = 0.0
+    last_voice_tab_switched = ""
     # Exponential backoff guarding live-session reconnection (see the audio_chunk handler).
     live_session_backoff = 1.0
     live_session_retry_after = 0.0
@@ -1003,6 +1059,10 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                                 cleaned_in = _is_meaningful_user_speech(accumulated_in_text)
                                 if cleaned_in:
                                     user_has_spoken_meaningfully = True
+                                    # If Joy was currently speaking, flush her output queue on the client immediately
+                                    if accumulated_out_text:
+                                        accumulated_out_text = ""
+                                        await send_safe({"type": "interrupted", "reason": "user_voice_barge_in"})
                                     await send_safe(
                                         {
                                             "type": "input_transcript",
@@ -1012,12 +1072,37 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                                             "finished": bool(getattr(in_tr, "finished", False)),
                                         }
                                     )
+                                    # Real-time voice tab switching ("switch to FX", "go to payments", "back to change of mandate")
+                                    if cleaned_in != last_voice_tab_switched:
+                                        tab_res = await asyncio.to_thread(
+                                            _detect_tab_switch_intent, cleaned_in, active_cid
+                                        )
+                                        if tab_res and tab_res.get("ui_sync"):
+                                            last_voice_tab_switched = cleaned_in
+                                            ui_s = tab_res["ui_sync"]
+                                            await send_safe(
+                                                {
+                                                    "type": "tool_call_result",
+                                                    "call_id": f"voice_tab_{audio_seq}",
+                                                    "tool_name": "switch_workspace_tab",
+                                                    "args": {"tab_name": cleaned_in, "customer_id": active_cid},
+                                                    "result": {
+                                                        k: v
+                                                        for k, v in tab_res.items()
+                                                        if k not in ("workspace_snapshot", "ui_sync")
+                                                    },
+                                                    "ui_sync": ui_s,
+                                                }
+                                            )
+                                            await broadcaster.broadcast(ui_s)
 
                             mt = getattr(sc, "model_turn", None)
                             if mt and mt.parts:
                                 for part in mt.parts:
                                     inline = getattr(part, "inline_data", None)
                                     if inline and inline.data:
+                                        if time.monotonic() < barge_in_discard_until:
+                                            continue
                                         audio_seq += 1
                                         b64_pcm = base64.b64encode(inline.data).decode("ascii")
                                         await send_safe(
@@ -1032,7 +1117,7 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                                         )
 
                             out_tr = getattr(sc, "output_transcription", None)
-                            if out_tr and out_tr.text:
+                            if out_tr and out_tr.text and time.monotonic() >= barge_in_discard_until:
                                 accumulated_out_text += out_tr.text
                                 await send_safe(
                                     {
@@ -1061,6 +1146,7 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                                 current_voice_turn_id = f"voice_turn_{turn_counter}"
                                 accumulated_out_text = ""
                                 accumulated_in_text = ""
+                                last_voice_tab_switched = ""
                                 await send_safe({"type": "turn_complete"})
                     if not got_any:
                         logger.info(
@@ -1141,10 +1227,10 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                 )
 
             elif msg_type in ("barge_in", "interrupt"):
-                # Do NOT close the live session here. Tearing it down discarded the entire
-                # conversation history every time the user interrupted, so the model lost all
-                # context mid-call. The Live API already handles interruption server-side when
-                # new audio arrives; the client just needs to flush its playback buffer.
+                # Abort any active verbatim greeting narration and discard stale in-flight chunks
+                # from the old turn while preserving the conversational session history.
+                interrupt_event.set()
+                barge_in_discard_until = time.monotonic() + 0.85
                 await send_safe({"type": "interrupted", "reason": "user_barge_in"})
                 await send_safe({"type": "barge_in_ack"})
 
@@ -1189,6 +1275,7 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
 
                 turn_counter += 1
                 g_tid = f"voice_greeting_{turn_counter}"
+                interrupt_event.clear()
 
                 # 1. Publish Joy's greeting transcript immediately so the ringer stops and the
                 #    iChat bubble shows the banker greeting (never a customer line).
@@ -1204,9 +1291,9 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                 )
 
                 # 2. Speak the EXACT same sentence aloud via a dedicated verbatim narration session.
-                #    The main conversational session is never asked to "improvise a greeting", which is
-                #    what previously made it role-play the customer ("Hey Joy, I need to change my supplier...").
-                spoke = await speak_verbatim_as_joy(JOY_GREETING_TEXT, send_safe)
+                spoke = await speak_verbatim_as_joy(
+                    JOY_GREETING_TEXT, send_safe, interrupt_event=interrupt_event, turn_id=g_tid
+                )
 
                 if not spoke:
                     # Cloudtop ADC expired and no local AI Studio audio: stream the greeting audio

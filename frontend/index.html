@@ -817,32 +817,46 @@
               <h2>Smart Verification Card &amp; Payment Rail Optimizer (Slides 7&ndash;8)</h2>
               <p>Collapsing the 3-screen payment sequence into a single cognitive canvas with 100% Multimodal OCR &amp; BEC Fraud Screening.</p>
             </div>
-            <div style="display:flex; gap:8px;">
-              <span class="badge badge-green">100% Multimodal OCR Extraction</span>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <span class="badge" id="uc2StatusBadge" style="background:#F3F4F6; color:#4B5563; border:1px solid #D1D5DB;">Standby &middot; Awaiting Invoice Instruction</span>
               <button type="button" class="btn btn-secondary" id="toggleBecFraudSimBtn">Simulate BEC Account Mismatch (017-482910-8)</button>
+              <button type="button" class="btn btn-ghost" id="resetUc2CanvasBtn" style="display:none; font-size:12px;">Reset Canvas</button>
             </div>
           </div>
           <div class="section-card-body">
+            <!-- Prompt / Instruction Banner shown while in Standby state -->
+            <div id="uc2StandbyBanner" style="background:#F8FAFC; border:1.5px dashed #CBD5E1; border-radius:10px; padding:12px 16px; margin-bottom:16px; display:flex; justify-content:space-between; align-items:center; gap:12px;">
+              <div>
+                <div style="font-size:11.5px; font-weight:700; color:#E31837; text-transform:uppercase; letter-spacing:0.04em;">Awaiting Voice or Chat Payment Instruction</div>
+                <div style="font-size:13px; color:#334155; margin-top:2px;">
+                  Say or type to Joy: <strong>&ldquo;Prepare an invoice payment of SGD 14,250 to SingaTech Industrial and verify their account details.&rdquo;</strong>
+                </div>
+              </div>
+              <button type="button" class="btn btn-secondary" id="quickExtractInvoiceBtn" style="white-space:nowrap; font-weight:700;">
+                Extract Sample Invoice (INV-2026-889) &rarr;
+              </button>
+            </div>
+
             <div style="display:grid; grid-template-columns: 1fr 1fr; gap:20px;">
               <!-- Left: Smart Verification Card (Slide 7) -->
-              <div style="border:1px solid #E5E7EB; border-radius:12px; padding:18px; background:#F9FAFB;">
-                <div style="font-size:12px; font-weight:700; color:#6B7280; text-transform:uppercase; margin-bottom:10px;">Extracted Invoice &middot; INV-2026-889</div>
+              <div id="uc2InvoiceCardContainer" style="border:1.5px dashed #D1D5DB; border-radius:12px; padding:18px; background:#F9FAFB; transition:all 0.25s ease;">
+                <div id="uc2InvoiceHeaderLabel" style="font-size:12px; font-weight:700; color:#6B7280; text-transform:uppercase; margin-bottom:10px;">Invoice Queue &middot; Awaiting Multimodal OCR</div>
                 <div style="display:grid; gap:10px;">
                   <div style="background:#FFFFFF; border:1px solid #E5E7EB; border-radius:8px; padding:10px 12px;">
                     <div style="font-size:11px; color:#6B7280;">Beneficiary</div>
-                    <div style="font-size:15px; font-weight:700; color:#111827;" id="uc2BeneficiaryVal">SingaTech Industrial</div>
+                    <div style="font-size:15px; font-weight:600; color:#9CA3AF;" id="uc2BeneficiaryVal">&mdash; Awaiting invoice extraction &mdash;</div>
                   </div>
-                  <div style="background:#FFFFFF; border:1px solid #E5E7EB; border-radius:8px; padding:10px 12px;">
-                    <div style="font-size:11px; color:#6B7280;">Account No</div>
-                    <div style="font-size:15px; font-weight:700; font-family:var(--font-mono); color:#111827;" id="uc2AccountNoVal">003-918239-1</div>
+                  <div id="uc2AccountBoxWrap" style="background:#FFFFFF; border:1px solid #E5E7EB; border-radius:8px; padding:10px 12px; transition:all 0.25s ease;">
+                    <div style="font-size:11px; color:#6B7280;" id="uc2AccountLabel">Account No</div>
+                    <div style="font-size:15px; font-weight:600; font-family:var(--font-mono); color:#9CA3AF;" id="uc2AccountNoVal">&mdash; Pending whitelist screening &mdash;</div>
                   </div>
-                  <div style="background:#ECFDF5; border:1.5px solid #059669; border-radius:8px; padding:10px 12px;">
-                    <div style="font-size:11px; color:#065F46;">Amount (Verified Zero Transpose Risk)</div>
-                    <div style="font-size:16px; font-weight:700; color:#059669;" id="uc2AmountVal">SGD 14,250.00</div>
+                  <div id="uc2AmountBoxWrap" style="background:#FFFFFF; border:1px solid #E5E7EB; border-radius:8px; padding:10px 12px; transition:all 0.25s ease;">
+                    <div style="font-size:11px; color:#6B7280;" id="uc2AmountLabel">Amount (Zero Transpose Risk Check)</div>
+                    <div style="font-size:16px; font-weight:700; color:#9CA3AF;" id="uc2AmountVal">&mdash; Pending extraction &mdash;</div>
                   </div>
                   <div style="background:#FFFFFF; border:1px solid #E5E7EB; border-radius:8px; padding:10px 12px;">
                     <div style="font-size:11px; color:#6B7280;">Due Date</div>
-                    <div style="font-size:14px; font-weight:600; color:#111827;" id="uc2DueDateVal">28 Aug 2026</div>
+                    <div style="font-size:14px; font-weight:600; color:#9CA3AF;" id="uc2DueDateVal">&mdash;</div>
                   </div>
                 </div>
               </div>
@@ -850,32 +864,38 @@
               <!-- Right: 3-State Beneficiary Security Logic & Smart Router (Slide 8) -->
               <div style="display:flex; flex-direction:column; gap:14px;">
                 <div style="border:1px solid #E5E7EB; border-radius:12px; padding:16px; background:#FFFFFF;">
-                  <div style="font-size:12px; font-weight:700; color:#111827; text-transform:uppercase; margin-bottom:8px;">Beneficiary Security Logic (3-State Screening)</div>
-                  <div id="uc2StateVerifiedBox" style="background:#059669; color:#FFFFFF; border-radius:8px; padding:10px 14px; font-weight:700; font-size:13px; margin-bottom:6px;">
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <div style="font-size:12px; font-weight:700; color:#111827; text-transform:uppercase;">Beneficiary Security Logic (3-State Screening)</div>
+                    <span id="uc2SecurityStatePill" style="font-size:10.5px; font-weight:700; padding:2px 8px; border-radius:999px; background:#F3F4F6; color:#6B7280;">STANDBY</span>
+                  </div>
+                  <div id="uc2StateVerifiedBox" style="background:#F3F4F6; color:#4B5563; border:1px solid #E5E7EB; border-radius:8px; padding:10px 14px; font-weight:600; font-size:13px; margin-bottom:6px; opacity:0.5; transition:all 0.25s ease;">
                     &#x2713; [Verified Payee] &mdash; Matches DBS IDEAL Whitelisted Master (003-918239-1)
                   </div>
-                  <div id="uc2StateBecBox" style="background:#FEF3C7; color:#92400E; border:1px solid #F59E0B; border-radius:8px; padding:10px 14px; font-weight:700; font-size:12.5px; margin-bottom:6px; opacity:0.55;">
+                  <div id="uc2StateBecBox" style="background:#F9FAFB; color:#6B7280; border:1px solid #E5E7EB; border-radius:8px; padding:10px 14px; font-weight:600; font-size:12.5px; margin-bottom:6px; opacity:0.45; transition:all 0.25s ease;">
                     &#x26A0;&#xFE0F; [Caution - Mismatched Account] &mdash; BEC Fraud Flag: Name matches, Account 017-482910-8 differs
                   </div>
-                  <div style="background:#E0F2FE; color:#0369A1; border-radius:8px; padding:8px 14px; font-weight:600; font-size:12px; opacity:0.65;">
+                  <div id="uc2StateNewPayeeBox" style="background:#F9FAFB; color:#6B7280; border:1px solid #E5E7EB; border-radius:8px; padding:8px 14px; font-weight:600; font-size:12px; opacity:0.45; transition:all 0.25s ease;">
                     + [+ New Payee] &mdash; Requires Step-Up 2FA
                   </div>
                 </div>
 
                 <div style="border:1px solid #E5E7EB; border-radius:12px; padding:16px; background:#FFFFFF;">
-                  <div style="font-size:12px; font-weight:700; color:#111827; text-transform:uppercase; margin-bottom:8px;">Payment Rail Optimization (Smart Router &le; SGD 200,000)</div>
-                  <div style="background:#059669; color:#FFFFFF; border-radius:8px; padding:10px 14px; display:flex; justify-content:space-between; align-items:center; font-weight:700; font-size:13px; margin-bottom:6px;">
-                    <span>&#x2713; FAST (Recommended Path)</span>
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <div style="font-size:12px; font-weight:700; color:#111827; text-transform:uppercase;">Payment Rail Optimization (Smart Router &le; SGD 200,000)</div>
+                    <span id="uc2RailStatePill" style="font-size:10.5px; font-weight:700; padding:2px 8px; border-radius:999px; background:#F3F4F6; color:#6B7280;">STANDBY</span>
+                  </div>
+                  <div id="uc2RailFastBox" style="background:#F3F4F6; color:#4B5563; border:1px solid #E5E7EB; border-radius:8px; padding:10px 14px; display:flex; justify-content:space-between; align-items:center; font-weight:600; font-size:13px; margin-bottom:6px; opacity:0.55; transition:all 0.25s ease;">
+                    <span id="uc2RailFastLabel">FAST (Evaluating Threshold &le; SGD 200,000)</span>
                     <span>$0 fee &middot; Instant</span>
                   </div>
-                  <div style="background:#F3F4F6; color:#374151; border-radius:8px; padding:8px 14px; display:flex; justify-content:space-between; align-items:center; font-weight:600; font-size:12.5px;">
+                  <div id="uc2RailMepsBox" style="background:#F9FAFB; color:#6B7280; border:1px solid #E5E7EB; border-radius:8px; padding:8px 14px; display:flex; justify-content:space-between; align-items:center; font-weight:600; font-size:12.5px; opacity:0.45; transition:all 0.25s ease;">
                     <span>MEPS</span>
                     <span>$15 fee</span>
                   </div>
                 </div>
 
                 <button type="button" class="btn btn-primary" id="stagePaymentIdealBtn" style="width:100%; padding:13px; font-size:14px; font-weight:700;">
-                  Stage in Native IDEAL generating Ref FT262359902 &rarr;
+                  Verify Invoice &amp; Stage Payment in Native IDEAL &rarr;
                 </button>
               </div>
             </div>
@@ -894,19 +914,12 @@
               <h2>Quantitative FX Presentment &amp; Conversational Partial Hedge (Slides 9&ndash;10)</h2>
               <p>Upgrading FX advisory from static chat to quantitative VaR presentment &amp; instant pre-trade forward booking. All figures below are computed from the live pre-trade quote.</p>
             </div>
-            <span class="badge badge-green" id="uc3PretradeBadge">Pre-Trade Checks: PASSED</span>
+            <span class="badge" id="uc3PretradeBadge" style="background:#F3F4F6; color:#4B5563; border:1px solid #D1D5DB;">Pre-Trade Checks: STANDBY</span>
           </div>
           <div class="section-card-body">
             <div style="display:grid; grid-template-columns: 1.25fr 1fr; gap:20px;">
               <!-- Left: Data-Driven USD/SGD Volatility Cone & 90-Day Forward Lock Chart (Slide 9)
-
-                   This card is rendered by renderUc3FxAdvisoryPanel() in the frontend bundle from
-                   the values the FX pre-trade tool actually returns (spot, 90-day forward,
-                   payable and VaR). It used to be a hand-written static SVG: the trajectory was
-                   drawn with a `Q ... T ... T ...` smooth-curve chain, and because each `T` mirrors
-                   the previous control point the amplitude compounded until the curve escaped the
-                   viewBox and was clipped at the top and bottom of the plot. Every rate on it was
-                   also a hardcoded literal, so the chart never reflected the booked trade. -->
+                   Rendered by renderUc3FxAdvisoryPanel() in the frontend bundle from the live pre-trade quote. -->
               <div style="background:#111827; color:#FFFFFF; border-radius:14px; padding:20px; box-shadow:0 8px 24px rgba(17,24,39,0.18);">
                 <div id="uc3FxChartHost">
                   <div style="font-size:11px; color:#9CA3AF; text-transform:uppercase; font-weight:700;">Dynamic UI Target State &middot; USD/SGD 90-Day Exposure</div>
@@ -921,20 +934,20 @@
               <div style="display:flex; flex-direction:column; gap:14px;">
                 <div style="border:1px solid #E5E7EB; border-radius:12px; padding:16px; background:#F9FAFB;">
                   <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                    <span style="font-size:11px; font-weight:700; color:#6B7280; text-transform:uppercase;">Conversational Partial Hedge (70%)</span>
-                    <span class="badge badge-green">Pre-Trade Checks: PASSED</span>
+                    <span style="font-size:11px; font-weight:700; color:#6B7280; text-transform:uppercase;">Conversational Partial Hedge Sizing</span>
+                    <span class="badge" id="uc3RightPretradeBadge" style="background:#F3F4F6; color:#4B5563; border:1px solid #D1D5DB;">Standby</span>
                   </div>
-                  <div id="uc3HedgeMathVal" style="font-family:var(--font-mono); font-size:14px; font-weight:700; color:#111827; background:#FFFFFF; border:1px solid #D1D5DB; border-radius:8px; padding:8px 12px; margin-bottom:10px;">
-                    0.70 &times; USD 5M = <strong>USD 3,500,000</strong>
+                  <div id="uc3HedgeMathVal" style="font-family:var(--font-mono); font-size:13px; font-weight:600; color:#6B7280; background:#FFFFFF; border:1px dashed #D1D5DB; border-radius:8px; padding:8px 12px; margin-bottom:10px;">
+                    Awaiting hedge instruction (e.g. 70% of USD 5,000,000)
                   </div>
                   <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px;">
                     <div style="background:#FFFFFF; border:1px solid #E5E7EB; border-radius:8px; padding:8px 10px;">
                       <div style="font-size:10px; color:#6B7280; font-weight:700;">YOU BUY</div>
-                      <div style="font-size:15px; font-weight:700; color:#111827;" id="uc3YouBuyVal">USD 3,500,000</div>
+                      <div style="font-size:15px; font-weight:700; color:#9CA3AF;" id="uc3YouBuyVal">&mdash;</div>
                     </div>
                     <div style="background:#FFFFFF; border:1px solid #E5E7EB; border-radius:8px; padding:8px 10px;">
                       <div style="font-size:10px; color:#6B7280; font-weight:700;">TENOR &amp; RATE</div>
-                      <div id="uc3TenorRateVal" style="font-size:15px; font-weight:700; color:#E31837;">3M @ 1.3538</div>
+                      <div id="uc3TenorRateVal" style="font-size:15px; font-weight:700; color:#9CA3AF;">&mdash;</div>
                     </div>
                   </div>
                   <button type="button" class="btn btn-primary" id="bookFxForwardBtn" style="width:100%; background:#059669; border-color:#059669; padding:11px; font-size:13.5px; font-weight:700;">
@@ -942,13 +955,13 @@
                   </button>
                 </div>
 
-                <div id="uc3TradeConfirmationCard" style="border:1.5px solid #059669; border-radius:12px; padding:14px 16px; background:#ECFDF5;">
+                <div id="uc3TradeConfirmationCard" style="border:1.5px dashed #CBD5E1; border-radius:12px; padding:14px 16px; background:#F8FAFC; transition:all 0.25s ease;">
                   <div style="display:flex; justify-content:space-between; align-items:center;">
                     <div>
-                      <div style="font-size:11px; font-weight:700; color:#065F46; text-transform:uppercase;">FX Trade Confirmation &middot; Verified</div>
-                      <div style="font-size:16px; font-weight:700; font-family:var(--font-mono); color:#047857; margin-top:2px;" id="uc3ContractIdVal">Contract ID: CF03943335-01 &#x2713;</div>
+                      <div id="uc3TradeConfirmTitle" style="font-size:11px; font-weight:700; color:#64748B; text-transform:uppercase;">FX Trade Confirmation &middot; Standby</div>
+                      <div style="font-size:14px; font-weight:600; font-family:var(--font-mono); color:#94A3B8; margin-top:2px;" id="uc3ContractIdVal">No forward contract booked yet</div>
                     </div>
-                    <span class="badge badge-green">Booked</span>
+                    <span class="badge" id="uc3BookedBadge" style="background:#F1F5F9; color:#64748B;">Unbooked</span>
                   </div>
                 </div>
               </div>
@@ -1048,6 +1061,6 @@
 
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="/app.js?v=20260919_v9"></script>
+  <script src="/app.js?v=20260919_v10"></script>
 </body>
 </html>

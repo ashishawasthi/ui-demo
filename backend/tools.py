@@ -2499,6 +2499,88 @@ def validate_mandate_rules(
     return res
 
 
+def switch_workspace_tab(
+    tab_name: str = "UC1_MANDATE",
+    stage: int | str | None = None,
+    customer_id: str | None = None,
+) -> dict[str, Any]:
+    """Switch the active DBS IDEAL UI tab between 'UC1_MANDATE' ('1. Change of Mandate'), 'UC2_PAYMENT' ('2. Payment & BEC Shield'), and 'UC3_FX' ('3. FX Hedge & Pricing').
+    NOTE: Do NOT use this tool to switch corporate customer profiles (Technova, Meridian, Apex, Veritas, Banyan) — use `SwitchActiveCustomerProfile` for corporate entities.
+    """
+    ensure_db_initialized()
+    raw = str(tab_name or "").strip().lower()
+
+    # Guard against the LLM calling switch_workspace_tab when the user actually asked to switch
+    # corporate customer profiles (e.g. "Can you switch to very task?" -> Veritas CUST-004).
+    entity_markers = (
+        "technova", "tech nova", "meridian", "apex", "veritas", "very task", "veritask",
+        "veritas legal", "banyan", "cust-001", "cust-002", "cust-003", "cust-004", "cust-005",
+    )
+    if any(em in raw for em in entity_markers):
+        return SwitchActiveCustomerProfile(customer_id=tab_name)
+
+    resolved_uc = "UC1_MANDATE"
+    resolved_stage = 1
+    if stage is not None:
+        try:
+            resolved_stage = max(1, min(5, int(stage)))
+        except (TypeError, ValueError):
+            resolved_stage = 1
+
+    if any(k in raw for k in ("uc3", "fx", "hedge", "hedging", "forward", "var", "volatility", "pricing", "tab 3", "third")):
+        resolved_uc = "UC3_FX"
+        tab_label = "3. FX Hedge & Pricing"
+    elif any(k in raw for k in ("uc2", "payment", "payments", "bec", "invoice", "fast", "meps", "payee", "tab 2", "second")):
+        resolved_uc = "UC2_PAYMENT"
+        tab_label = "2. Payment & BEC Shield"
+    else:
+        resolved_uc = "UC1_MANDATE"
+        tab_label = "1. Change of Mandate"
+        if "stage 2" in raw or "signator" in raw:
+            resolved_stage = 2
+        elif "stage 3" in raw or "rule" in raw or "limit" in raw or "sandbox" in raw:
+            resolved_stage = 3
+        elif "stage 4" in raw or "board" in raw or "resolution" in raw:
+            resolved_stage = 4
+        elif "stage 5" in raw or "digisign" in raw or "submit" in raw:
+            resolved_stage = 5
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cid = _resolve_customer_id(cur, customer_id)
+            cur.execute(
+                """
+                UPDATE active_workspace_state
+                SET active_stage = %s,
+                    last_tool_executed = 'switch_workspace_tab',
+                    updated_at = NOW()
+                WHERE workspace_id = 'DEFAULT'
+                """,
+                (resolved_stage,),
+            )
+            snapshot = _fetch_workspace_snapshot(cur, cid)
+        conn.commit()
+
+    res = _build_response_with_ui_sync(
+        payload={
+            "status": "success",
+            "customer_id": cid,
+            "active_tab": resolved_uc,
+            "tab_label": tab_label,
+            "current_stage": resolved_stage,
+            "message": f"Switched workspace view to {tab_label}" + (f" (Stage {resolved_stage})" if resolved_uc == "UC1_MANDATE" else ""),
+        },
+        ui_action="SWITCH_WORKSPACE_TAB",
+        target_stage=resolved_stage,
+        updated_profile_id=cid,
+        snapshot=snapshot,
+        toast_title=f"Switched to {tab_label}",
+        toast_message=f"Active workspace view is now {tab_label}.",
+    )
+    res["ui_sync"]["target_usecase"] = resolved_uc
+    return res
+
+
 # ============================================================================
 # Registry & Dispatcher for Gemini Live Function Calling
 # ============================================================================
@@ -2508,6 +2590,7 @@ MANDATE_TOOL_FUNCTIONS: list[Callable[..., Any]] = [
     get_ideal_entity_profile,
     SwitchActiveCustomerProfile,
     switch_active_customer_profile,
+    switch_workspace_tab,
     add_or_update_signatory,
     upload_nric_and_add_signatory,
     revoke_signatory,
@@ -2566,6 +2649,11 @@ def execute_mandate_tool(tool_name: str, args: dict[str, Any] | None = None) -> 
         for alias in ("signatory_name", "name", "signatory_id_or_name", "signatory", "signatory_id"):
             if alias in call_args and call_args[alias]:
                 call_args["full_name"] = call_args[alias]
+                break
+    if "tab_name" in sig_params and "tab_name" not in call_args:
+        for alias in ("tab", "usecase", "target_usecase", "screen", "view", "section", "target_tab"):
+            if alias in call_args and call_args[alias]:
+                call_args["tab_name"] = call_args[alias]
                 break
 
     # Prevent stale customer_id="CUST-001" from LLM system prompt from overriding an active switched profile!
