@@ -732,7 +732,7 @@ async def speak_verbatim_as_joy(
     # Prefer AI Studio (`gemini-3.8-live` per Get_started_LiveAPI.py, then `models/gemini-3.8-live-extended-thinking`)
     # backed by Google Cloud Secret Manager; fall back to Vertex us-central1 if needed.
     candidates = [
-        ("ai_studio_38_live", clients.get("api_key"), "gemini-3.8-live", False),
+        ("ai_studio_38_live", clients.get("api_key_client"), "gemini-3.8-live", False),
         ("ai_studio", clients.get("api_key_live_alpha"), LOGICAL_MODEL_ID, True),
         ("vertex_usc1", clients.get("vertex_usc1"), LIVE_AUDIO_MODEL_ID, False),
     ]
@@ -833,9 +833,12 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
 
         # Primary: Google AI Studio Live API (`gemini-3.8-live` / `models/gemini-3.8-live-extended-thinking`)
         # following https://github.com/google-gemini/cookbook/blob/main/quickstarts/Get_started_LiveAPI.py
-        if clients.get("api_key_live_alpha") is not None or clients.get("api_key") is not None:
+        if (
+            clients.get("api_key_live_alpha") is not None
+            or clients.get("api_key_client") is not None
+        ):
             for live_client, candidate_model, use_thinking in [
-                (clients.get("api_key"), "gemini-3.8-live", False),
+                (clients.get("api_key_client"), "gemini-3.8-live", False),
                 (clients.get("api_key_live_alpha"), LOGICAL_MODEL_ID, True),
             ]:
                 if live_client is None:
@@ -1060,12 +1063,22 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                                 accumulated_in_text = ""
                                 await send_safe({"type": "turn_complete"})
                     if not got_any:
+                        logger.info(
+                            "Live reader loop: receive() returned no messages (EOF); "
+                            "closing reader for this session."
+                        )
                         break
             except asyncio.CancelledError:
                 pass
             except Exception as exc:
-                logger.debug("Live reader loop ended: %s", exc)
+                # This loop is the ONLY path that delivers model audio to the browser. Logging its
+                # death at debug level made a dead voice session look identical to an idle one:
+                # the greeting played, then every later turn silently returned nothing.
+                logger.warning("Live reader loop crashed: %s", exc, exc_info=True)
+            finally:
+                logger.info("Live reader loop exited after %d audio chunks.", audio_seq)
 
+        logger.info("Starting live reader loop for the conversational session.")
         live_receive_task = asyncio.create_task(_reader_loop())
         return live_session
 

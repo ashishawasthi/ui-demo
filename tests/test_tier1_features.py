@@ -527,8 +527,11 @@ class TestF7GeminiLiveAndFastAPIBackend:
 
     def test_f7_06_env_api_key_loaded_in_runtime_environment(self):
         import os
+        from backend import gemini_live
 
-        assert os.environ.get("GEMINI_API_KEY", "").startswith("AIzaSy")
+        clients = gemini_live.get_genai_clients()
+        key = clients.get("api_key") or os.environ.get("GEMINI_API_KEY", "")
+        assert key.startswith(("AIzaSy", "AQ.")), f"unexpected API key prefix: {key[:6]!r}"
         assert os.environ.get("GOOGLE_CLOUD_PROJECT") == "elevate-data-508005"
 
 

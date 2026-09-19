@@ -2564,35 +2564,51 @@
       const source = state.micAudioCtx.createMediaStreamSource(stream);
 
       const handleFloat32Frame = (input) => {
-        if (!state.isRecordingVoice || state.isVoiceMuted) return;
-        // CRITICAL ANTI-ECHO & RINGER GATE:
-        // Never stream mic audio while ringing, while waiting for Joy's greeting, while Joy is speaking,
-        // or during the 650ms acoustic echo tail after speaker playback finishes.
-        if (
+        if (!state.isRecordingVoice) return;
+
+        // CRITICAL: the stream to Gemini Live must be CONTINUOUS.
+        //
+        // Server-side automatic VAD decides the user's turn is over by observing the
+        // silence that FOLLOWS their speech. If the browser simply stops transmitting
+        // when the room goes quiet, the server never sees that trailing silence, never
+        // closes the turn, and the model never answers -- Joy greets you and then
+        // appears deaf forever, with no error raised anywhere.
+        //
+        // Verified empirically against models/gemini-3.8-live-extended-thinking:
+        //   stop sending after speech -> SILENT
+        //   audio_stream_end=True     -> SILENT
+        //   keep streaming silence    -> RESPONDS
+        //
+        // So we NEVER drop a frame. During the mute / ringer / greeting / echo-tail
+        // windows we transmit digital silence instead, which keeps VAD fed while still
+        // preventing Joy from hearing herself or the ringer.
+        const suppressAudio =
+          state.isVoiceMuted ||
           state.isRinging ||
           state.isGreetingInProgress ||
           state.activePlaybackNodes.length > 0 ||
-          Date.now() - (state.lastPlaybackEndTime || 0) < 650
-        ) {
-          return;
-        }
+          Date.now() - (state.lastPlaybackEndTime || 0) < 650;
 
         let sum = 0;
         const pcm16 = new Int16Array(input.length);
-        for (let i = 0; i < input.length; i++) {
-          const s = Math.max(-1, Math.min(1, input[i]));
-          sum += Math.abs(s);
-          pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+        if (!suppressAudio) {
+          for (let i = 0; i < input.length; i++) {
+            const s = Math.max(-1, Math.min(1, input[i]));
+            sum += Math.abs(s);
+            pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+          }
         }
         const avgAbs = sum / Math.max(1, input.length);
-        state.currentAudioAmplitude = Math.min(1, avgAbs * 6);
-
-        // Voice Activity Energy Gate: ignore low-level room hum/fan noise unless speech was active in the last 700ms
+        state.currentAudioAmplitude = suppressAudio ? 0 : Math.min(1, avgAbs * 6);
         if (avgAbs >= 0.008) {
           state.lastVoiceSpeechAt = Date.now();
-        } else if (Date.now() - (state.lastVoiceSpeechAt || 0) > 700) {
-          return;
         }
+
+        // NOTE: the old "Voice Activity Energy Gate" lived here and returned early on
+        // quiet frames to suppress junk '🎤 Hum.' / '🎤 ம்' transcripts. That is what
+        // broke two-way voice. Those junk transcripts are already filtered server-side
+        // by _is_meaningful_user_speech() in backend/gemini_live.py, so the client-side
+        // gate was redundant as well as harmful. Do not reintroduce it.
 
         const bytes = new Uint8Array(pcm16.buffer);
         let binary = '';
