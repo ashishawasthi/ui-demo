@@ -671,7 +671,12 @@ SIGNATORIES_SEED: list[dict[str, Any]] = [
         "customer_id": "CUST-004",
         "full_name": "Beatrice Chee",
         "role_title": "Managing Partner & Conveyancing Head",
-        "signing_group": "A",
+        # Group B, not Group A. The block comment above documents CUST-004 as
+        # "1 Group A [Sole Managing Partner], 2 Group B, 1 Group C", but Beatrice was seeded into
+        # Group A, giving the entity two Group A partners. That contradicted the profile's whole
+        # purpose (demonstrating the sole-Group-A governance guardrail) and had been papered over
+        # with a hardcoded special case in revoke_signatory(). Evelyn Tan is the sole Group A.
+        "signing_group": "B",
         "id_type": "NRIC",
         "id_number_masked": "S****334B",
         "nationality": "SG",

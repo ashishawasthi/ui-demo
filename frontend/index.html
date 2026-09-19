@@ -880,39 +880,28 @@
           <div class="section-card-header">
             <div>
               <h2>Quantitative FX Presentment &amp; Conversational Partial Hedge (Slides 9&ndash;10)</h2>
-              <p>Upgrading FX advisory from static chat to quantitative VaR presentment (`~SGD 200,000 VaR` on `USD 5M`) &amp; instant pre-trade forward booking.</p>
+              <p>Upgrading FX advisory from static chat to quantitative VaR presentment &amp; instant pre-trade forward booking. All figures below are computed from the live pre-trade quote.</p>
             </div>
             <span class="badge badge-green" id="uc3PretradeBadge">Pre-Trade Checks: PASSED</span>
           </div>
           <div class="section-card-body">
             <div style="display:grid; grid-template-columns: 1.25fr 1fr; gap:20px;">
-              <!-- Left: Dark-Themed USD/SGD Trajectory & 90-Day Forward Lock Chart (Slide 9) -->
+              <!-- Left: Data-Driven USD/SGD Volatility Cone & 90-Day Forward Lock Chart (Slide 9)
+
+                   This card is rendered by renderUc3FxAdvisoryPanel() in the frontend bundle from
+                   the values the FX pre-trade tool actually returns (spot, 90-day forward,
+                   payable and VaR). It used to be a hand-written static SVG: the trajectory was
+                   drawn with a `Q ... T ... T ...` smooth-curve chain, and because each `T` mirrors
+                   the previous control point the amplitude compounded until the curve escaped the
+                   viewBox and was clipped at the top and bottom of the plot. Every rate on it was
+                   also a hardcoded literal, so the chart never reflected the booked trade. -->
               <div style="background:#111827; color:#FFFFFF; border-radius:14px; padding:20px; box-shadow:0 8px 24px rgba(17,24,39,0.18);">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-                  <div>
-                    <div style="font-size:11px; color:#9CA3AF; text-transform:uppercase; font-weight:700;">Dynamic UI Target State &middot; USD/SGD 90-Day Exposure</div>
-                    <div style="font-size:18px; font-weight:700; margin-top:2px;">USD 5,000,000 Payable &middot; <span style="color:#F87171;">~SGD 200,000 VaR Uncertainty</span></div>
+                <div id="uc3FxChartHost">
+                  <div style="font-size:11px; color:#9CA3AF; text-transform:uppercase; font-weight:700;">Dynamic UI Target State &middot; USD/SGD 90-Day Exposure</div>
+                  <div style="font-size:12.5px; color:#9CA3AF; padding:36px 4px; text-align:center; line-height:1.6;">
+                    Awaiting a live USD/SGD pre-trade quote.<br />
+                    Ask Joy to quantify your FX exposure to populate this chart.
                   </div>
-                  <span style="background:#DC2626; color:#FFFFFF; padding:4px 10px; border-radius:6px; font-family:var(--font-mono); font-size:12px; font-weight:700;">90D Fwd Lock: 1.3538</span>
-                </div>
-
-                <svg width="100%" height="150" viewBox="0 0 420 150" style="display:block; background:#1F2937; border-radius:10px; padding:8px;">
-                  <!-- Grid lines -->
-                  <line x1="20" y1="38" x2="350" y2="38" stroke="#EF4444" stroke-width="2.5"></line>
-                  <rect x="352" y="26" width="60" height="22" rx="4" fill="#DC2626"></rect>
-                  <text x="358" y="41" font-size="11" font-weight="700" fill="#FFFFFF">1.3538</text>
-                  <text x="26" y="31" font-size="10" font-weight="700" fill="#FCA5A5">90-Day Forward Lock Line (Removes ~SGD 200K VaR)</text>
-
-                  <!-- Historical USD/SGD Volatility Curve -->
-                  <path d="M 20 110 Q 45 30, 70 85 T 120 55 T 175 95 T 230 50 T 285 105 T 350 112" fill="none" stroke="#60A5FA" stroke-width="2.5"></path>
-                  <circle cx="350" cy="112" r="5" fill="#3B82F6"></circle>
-                  <rect x="352" y="100" width="60" height="22" rx="4" fill="#0F172A" stroke="#475569"></rect>
-                  <text x="358" y="115" font-size="11" font-weight="700" fill="#93C5FD">1.2800</text>
-                  <text x="295" y="132" font-size="10" font-weight="700" fill="#93C5FD">Spot: 1.2800</text>
-                </svg>
-
-                <div style="margin-top:12px; background:#1F2937; border:1px solid #374151; border-radius:8px; padding:10px 14px; font-size:12.5px; color:#E5E7EB;">
-                  <strong>Quant VaR Analysis:</strong> ~3% quarterly USD/SGD movement = <strong>~SGD 200,000 VaR cash-flow uncertainty</strong> on a USD 5M payable. Locking a 90-Day Forward or SecureFX removes this uncertainty today.
                 </div>
               </div>
 
@@ -923,7 +912,7 @@
                     <span style="font-size:11px; font-weight:700; color:#6B7280; text-transform:uppercase;">Conversational Partial Hedge (70%)</span>
                     <span class="badge badge-green">Pre-Trade Checks: PASSED</span>
                   </div>
-                  <div style="font-family:var(--font-mono); font-size:14px; font-weight:700; color:#111827; background:#FFFFFF; border:1px solid #D1D5DB; border-radius:8px; padding:8px 12px; margin-bottom:10px;">
+                  <div id="uc3HedgeMathVal" style="font-family:var(--font-mono); font-size:14px; font-weight:700; color:#111827; background:#FFFFFF; border:1px solid #D1D5DB; border-radius:8px; padding:8px 12px; margin-bottom:10px;">
                     0.70 &times; USD 5M = <strong>USD 3,500,000</strong>
                   </div>
                   <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px;">
@@ -933,7 +922,7 @@
                     </div>
                     <div style="background:#FFFFFF; border:1px solid #E5E7EB; border-radius:8px; padding:8px 10px;">
                       <div style="font-size:10px; color:#6B7280; font-weight:700;">TENOR &amp; RATE</div>
-                      <div style="font-size:15px; font-weight:700; color:#E31837;">3M @ 1.3538</div>
+                      <div id="uc3TenorRateVal" style="font-size:15px; font-weight:700; color:#E31837;">3M @ 1.3538</div>
                     </div>
                   </div>
                   <button type="button" class="btn btn-primary" id="bookFxForwardBtn" style="width:100%; background:#059669; border-color:#059669; padding:11px; font-size:13.5px; font-weight:700;">

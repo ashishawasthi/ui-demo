@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+import json
 import logging
 import os
 from pathlib import Path
+import secrets
 from typing import Any
 
 from dotenv import load_dotenv
@@ -58,6 +60,16 @@ class UIEventBroadcaster:
 
     def __init__(self) -> None:
         self.connections: set[WebSocket] = set()
+        # Strong references to in-flight fire-and-forget broadcast tasks. Without this the
+        # event loop only holds a weak reference and the GC can destroy a pending task
+        # mid-execution ("Task was destroyed but it is pending!"), silently dropping ui_sync.
+        self._pending_tasks: set[asyncio.Task[Any]] = set()
+        # The main ASGI event loop, captured at startup. Synchronous tool callbacks now run on
+        # FastAPI's threadpool, so they cannot rely on asyncio.get_running_loop().
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        self._loop = loop
 
     async def connect(self, ws: WebSocket) -> None:
         await ws.accept()
@@ -77,12 +89,31 @@ class UIEventBroadcaster:
             self.connections.discard(ws)
 
     def broadcast_sync(self, message: dict[str, Any]) -> None:
-        """Schedule async broadcast from synchronous tool callbacks if an event loop is running."""
+        """Schedule an async broadcast from a synchronous tool callback.
+
+        Works both on the event loop thread and from FastAPI's threadpool workers.
+        """
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(self.broadcast(message))
         except RuntimeError:
-            pass
+            loop = None
+
+        if loop is not None:
+            task = loop.create_task(self.broadcast(message))
+            self._pending_tasks.add(task)
+            task.add_done_callback(self._pending_tasks.discard)
+            return
+
+        # Running on a threadpool worker: hand the coroutine to the main loop.
+        main_loop = self._loop
+        if main_loop is None or main_loop.is_closed():
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(self.broadcast(message), main_loop)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Dropped cross-thread ui_sync broadcast: %s", exc)
+
+
 
 
 broadcaster = UIEventBroadcaster()
@@ -92,6 +123,7 @@ register_ui_sync_callback(broadcaster.broadcast_sync)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize PostgreSQL 18.6 / CloudSQL database schema and 5 corporate customer profiles on startup."""
+    broadcaster.bind_loop(asyncio.get_running_loop())
     init_db(force_reseed=False)
     yield
 
@@ -102,20 +134,34 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# `allow_origins=["*"]` together with `allow_credentials=True` is self-defeating: browsers reject a
+# wildcard ACAO on credentialed requests, so it grants nothing while advertising a wide-open policy.
+# Default to an open, credential-less policy (this app authenticates nothing via cookies) and allow
+# an explicit allowlist via ALLOWED_ORIGINS for deployments that do need credentials.
+_allowed_origins_env = os.environ.get("ALLOWED_ORIGINS", "").strip()
+if _allowed_origins_env:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[o.strip() for o in _allowed_origins_env.split(",") if o.strip()],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 # ============================================================================
 # Health, AI Studio Key & Live Config
 # ============================================================================
 @app.get("/api/health")
-async def api_health() -> dict[str, Any]:
+def api_health() -> dict[str, Any]:
     db_health = get_db_health()
     gemini_status = get_model_status()
     return {
@@ -126,7 +172,7 @@ async def api_health() -> dict[str, Any]:
 
 
 @app.get("/api/config/live")
-async def api_get_live_config() -> dict[str, Any]:
+def api_get_live_config() -> dict[str, Any]:
     clients = get_genai_clients()
     return {
         "status": "ok",
@@ -139,7 +185,29 @@ async def api_get_live_config() -> dict[str, Any]:
 
 
 @app.post("/api/config/api-key")
-async def api_update_api_key(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+async def api_update_api_key(
+    request: Request,
+    payload: dict[str, Any] = Body(...),
+) -> dict[str, Any]:
+    """Rotate the runtime Gemini API key.
+
+    This mutates global LLM credentials for every session, so it is gated behind
+    ADMIN_API_TOKEN whenever that variable is configured (always set it in deployed
+    environments). When unset, the endpoint stays open for local development only.
+    """
+    admin_token = os.environ.get("ADMIN_API_TOKEN", "").strip()
+    if admin_token:
+        presented = request.headers.get("x-admin-token", "")
+        if not presented:
+            auth_header = request.headers.get("authorization", "")
+            if auth_header.lower().startswith("bearer "):
+                presented = auth_header[7:]
+        if not secrets.compare_digest(presented, admin_token):
+            return JSONResponse(
+                status_code=401,
+                content={"status": "error", "message": "Unauthorized: admin token required."},
+            )
+
     new_key = str(payload.get("api_key") or "").strip()
     if not new_key:
         return JSONResponse(status_code=400, content={"status": "error", "message": "API key required."})
@@ -152,19 +220,19 @@ async def api_update_api_key(payload: dict[str, Any] = Body(...)) -> dict[str, A
 # ============================================================================
 @app.get("/api/customers")
 @app.get("/api/profiles")
-async def api_list_customers(entity_type: str | None = None) -> dict[str, Any]:
+def api_list_customers(entity_type: str | None = None) -> dict[str, Any]:
     return list_customer_profiles(entity_type_filter=entity_type)
 
 
 @app.get("/api/customers/{customer_id}/mandate")
 @app.get("/api/customers/{customer_id}")
 @app.get("/api/profiles/{customer_id}")
-async def api_get_customer_mandate(customer_id: str) -> dict[str, Any]:
+def api_get_customer_mandate(customer_id: str) -> dict[str, Any]:
     return get_customer_mandate_details(customer_id=customer_id)
 
 
 @app.post("/api/customers/switch")
-async def api_switch_customer_body(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+def api_switch_customer_body(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     cid = payload.get("customer_id") or payload.get("customer_identifier") or "CUST-001"
     stage = int(payload.get("target_stage") or payload.get("stage") or 1)
     return SwitchActiveCustomerProfile(customer_id=cid, target_stage=stage)
@@ -172,7 +240,7 @@ async def api_switch_customer_body(payload: dict[str, Any] = Body(...)) -> dict[
 
 @app.post("/api/profiles/{customer_id}/switch")
 @app.post("/api/customers/{customer_id}/switch")
-async def api_switch_customer_path(
+def api_switch_customer_path(
     customer_id: str,
     payload: dict[str, Any] | None = Body(default=None),
 ) -> dict[str, Any]:
@@ -185,7 +253,7 @@ async def api_switch_customer_path(
 # ============================================================================
 @app.post("/api/customers/{customer_id}/target-accounts")
 @app.post("/api/profiles/{customer_id}/target-accounts")
-async def api_update_target_accounts(
+def api_update_target_accounts(
     customer_id: str,
     payload: dict[str, Any] = Body(...),
 ) -> Response:
@@ -205,7 +273,7 @@ async def api_update_target_accounts(
 @app.patch("/api/profiles/{customer_id}/accounts/{account_id}")
 @app.post("/api/profiles/{customer_id}/accounts/{account_id}")
 @app.patch("/api/customers/{customer_id}/accounts/{account_id}")
-async def api_toggle_single_account(
+def api_toggle_single_account(
     customer_id: str,
     account_id: str,
     payload: dict[str, Any] = Body(...),
@@ -228,7 +296,7 @@ async def api_toggle_single_account(
 # ============================================================================
 @app.post("/api/customers/{customer_id}/signatories")
 @app.post("/api/profiles/{customer_id}/signatories")
-async def api_add_or_update_signatory(
+def api_add_or_update_signatory(
     customer_id: str,
     payload: dict[str, Any] = Body(...),
 ) -> dict[str, Any]:
@@ -250,7 +318,7 @@ async def api_add_or_update_signatory(
 
 @app.post("/api/customers/{customer_id}/signatories/revoke")
 @app.post("/api/profiles/{customer_id}/signatories/revoke")
-async def api_revoke_signatory_body(
+def api_revoke_signatory_body(
     customer_id: str,
     payload: dict[str, Any] = Body(...),
 ) -> JSONResponse:
@@ -273,7 +341,7 @@ async def api_revoke_signatory_body(
 
 @app.post("/api/profiles/{customer_id}/signatories/{signatory_id}/revoke")
 @app.post("/api/customers/{customer_id}/signatories/{signatory_id}/revoke")
-async def api_revoke_signatory_path(
+def api_revoke_signatory_path(
     customer_id: str,
     signatory_id: str,
     payload: dict[str, Any] | None = Body(default=None),
@@ -291,7 +359,7 @@ async def api_revoke_signatory_path(
 
 @app.post("/api/profiles/{customer_id}/signatories/{signatory_id}/restore")
 @app.post("/api/customers/{customer_id}/signatories/{signatory_id}/restore")
-async def api_restore_signatory(
+def api_restore_signatory(
     customer_id: str,
     signatory_id: str,
 ) -> dict[str, Any]:
@@ -323,7 +391,7 @@ async def api_restore_signatory(
 @app.post("/api/customers/{customer_id}/signing-rules")
 @app.post("/api/profiles/{customer_id}/rules")
 @app.post("/api/profiles/{customer_id}/signing-rules")
-async def api_configure_signing_rules(
+def api_configure_signing_rules(
     customer_id: str,
     payload: dict[str, Any] = Body(...),
 ) -> dict[str, Any]:
@@ -343,7 +411,7 @@ async def api_configure_signing_rules(
 
 @app.post("/api/customers/{customer_id}/simulate")
 @app.post("/api/profiles/{customer_id}/simulate")
-async def api_simulate_transaction(
+def api_simulate_transaction(
     customer_id: str,
     payload: dict[str, Any] = Body(...),
 ) -> dict[str, Any]:
@@ -361,7 +429,7 @@ async def api_simulate_transaction(
 @app.post("/api/customers/{customer_id}/board-resolution/audit")
 @app.post("/api/profiles/{customer_id}/audit-resolution")
 @app.post("/api/profiles/{customer_id}/board-resolution/audit")
-async def api_audit_board_resolution(
+def api_audit_board_resolution(
     customer_id: str,
     payload: dict[str, Any] = Body(...),
 ) -> dict[str, Any]:
@@ -379,7 +447,7 @@ async def api_audit_board_resolution(
 # ============================================================================
 @app.post("/api/customers/{customer_id}/submit")
 @app.post("/api/profiles/{customer_id}/submit")
-async def api_submit_mandate_change(
+def api_submit_mandate_change(
     customer_id: str,
     payload: dict[str, Any] | None = Body(default=None),
 ) -> JSONResponse:
@@ -398,7 +466,7 @@ async def api_submit_mandate_change(
 
 @app.post("/api/customers/{customer_id}/cosign")
 @app.post("/api/profiles/{customer_id}/cosign")
-async def api_cosign_by_customer(
+def api_cosign_by_customer(
     customer_id: str,
     payload: dict[str, Any] | None = Body(default=None),
 ) -> dict[str, Any]:
@@ -412,7 +480,7 @@ async def api_cosign_by_customer(
 
 
 @app.post("/api/applications/{application_id}/cosign")
-async def api_cosign_by_application(
+def api_cosign_by_application(
     application_id: str,
     payload: dict[str, Any] | None = Body(default=None),
 ) -> dict[str, Any]:
@@ -430,13 +498,13 @@ async def api_cosign_by_application(
 # ============================================================================
 @app.post("/api/customers/{customer_id}/reset")
 @app.post("/api/profiles/{customer_id}/reset")
-async def api_reset_customer(customer_id: str) -> dict[str, Any]:
+def api_reset_customer(customer_id: str) -> dict[str, Any]:
     seed_single_customer(customer_id)
     return get_customer_mandate_details(customer_id=customer_id)
 
 
 @app.post("/api/reset")
-async def api_reset_all() -> dict[str, Any]:
+def api_reset_all() -> dict[str, Any]:
     counts = seed_all_data(reset_existing=True)
     return {"status": "success", "table_counts": counts}
 
@@ -445,18 +513,22 @@ async def api_reset_all() -> dict[str, Any]:
 # Gemini Live (`models/gemini-3.8-live-extended-thinking`) Chat & WebSocket
 # ============================================================================
 @app.post("/api/chat")
-async def api_chat(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+async def api_chat(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     message = str(payload.get("message") or payload.get("text") or "").strip()
     customer_id = payload.get("customer_id") or "CUST-001"
     current_stage = int(payload.get("current_stage") or payload.get("stage") or 1)
     if not message:
         return {"status": "error", "message": "Message text is required."}
 
+    # A request that arrived via the Cloud Run credential bridge must never bridge onwards.
+    allow_bridge = request.headers.get("x-no-bridge", "").strip() not in ("1", "true", "yes")
+
     result = await run_agent_chat_turn(
         message=message,
         customer_id=customer_id,
         current_stage=current_stage,
         event_callback=broadcaster.broadcast,
+        allow_bridge=allow_bridge,
     )
     if result.get("ui_sync"):
         await broadcaster.broadcast(result["ui_sync"])
@@ -624,9 +696,17 @@ async def api_payment_prep_stage(payload: dict[str, Any] = Body(...)) -> dict[st
     if res.get("ui_sync"):
         await broadcaster.broadcast(res["ui_sync"])
     card = res.get("payment_prep_card") or {}
+    # Every figure below is read back from the tool result so the narrative can never drift
+    # from what was actually screened, routed and staged.
+    _amt = card.get("amount_sgd", card.get("amount"))
+    _amt_txt = f"{float(_amt):,.2f}" if isinstance(_amt, (int, float)) else str(_amt or "")
+    _rail = card.get("payment_rail") or card.get("rail") or "FAST"
+    _fee = card.get("rail_fee") or card.get("fee") or ""
+    _ref = card.get("ideal_reference") or card.get("reference") or card.get("staged_ref") or ""
     reply_msg = (
-        f"Extracted invoice `{card.get('invoice_ref', 'INV-2026-889')}` for **{card.get('beneficiary')}** (`SGD 14,250.00`), "
-        f"screened payee (`{card.get('security_badge')}`), optimized via **FAST ($0 fee · Instant)**, and staged in Native IDEAL (`Ref FT262359902`)."
+        f"Extracted invoice `{card.get('invoice_ref', '')}` for **{card.get('beneficiary')}** "
+        f"(`{card.get('currency', 'SGD')} {_amt_txt}`), screened payee (`{card.get('security_badge')}`), "
+        f"optimized via **{_rail}{f' ({_fee})' if _fee else ''}**, and staged in Native IDEAL (`Ref {_ref}`)."
     )
     return {
         **res,
@@ -658,9 +738,18 @@ async def api_fx_pretrade_and_book(payload: dict[str, Any] = Body(...)) -> dict[
     if res.get("ui_sync"):
         await broadcaster.broadcast(res["ui_sync"])
     card = res.get("fx_hedge_card") or {}
+    # Read every figure back from the tool result: the narrative must reflect the numbers
+    # actually computed and booked, not slide-deck constants.
+    _payable = float(card.get("total_payable_usd") or 0.0)
+    _buy = float(card.get("you_buy_usd") or 0.0)
+    _ratio = float(card.get("hedge_ratio_pct") or 0.0)
+    _var = float(card.get("var_uncertainty_sgd") or 0.0)
+    _vol = card.get("quarterly_volatility_pct")
     reply_msg = (
-        f"USD/SGD moves ~3% a quarter (`~SGD 200,000 VaR` uncertainty on `USD 5M`). "
-        f"Locked 70% partial forward (`0.70 × USD 5M = USD 3,500,000`, Tenor `3M`, Rate `1.3538`, `Pre-Trade Checks: PASSED`) under **Contract ID `{card.get('contract_id', 'CF03943335-01')}`**."
+        f"USD/SGD moves ~{_vol}% a quarter (`~SGD {_var:,.0f} VaR` uncertainty on `USD {_payable:,.0f}`). "
+        f"Locked {_ratio:g}% partial forward (`{_ratio / 100:.2f} × USD {_payable:,.0f} = USD {_buy:,.0f}`, "
+        f"Tenor `{card.get('tenor')}`, Rate `{card.get('forward_90d_rate')}`, "
+        f"`Pre-Trade Checks: {card.get('pretrade_checks')}`) under **Contract ID `{card.get('contract_id')}`**."
     )
     return {
         **res,

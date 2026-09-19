@@ -10,12 +10,15 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import itertools
 import json
+import logging
 import random
 import re
 from typing import Any, Callable
 
 from backend.db import ensure_db_initialized, get_connection, serialize_row
 from synthetic_data.seed import ACCOUNTS_SEED, SIGNATORIES_SEED, SIGNING_RULES_SEED
+
+logger = logging.getLogger("mandate_app.tools")
 
 FX_RATES_TO_SGD: dict[str, float] = {
     "SGD": 1.0,
@@ -43,8 +46,8 @@ def _emit_ui_sync(ui_sync: dict[str, Any]) -> None:
     if _UI_SYNC_BROADCAST_CALLBACK is not None:
         try:
             _UI_SYNC_BROADCAST_CALLBACK(ui_sync)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("ui_sync broadcast callback failed: %s", exc)
 
 
 def _resolve_customer_id(cur: Any, identifier: str | None = None) -> str:
@@ -929,13 +932,22 @@ def revoke_signatory(
                     FROM signatories
                     WHERE customer_id = %s
                       AND signing_group = 'A'
-                      AND status = 'ACTIVE'
+                      AND status IN ('ACTIVE', 'PENDING_ADDITION')
                       AND signatory_id != %s;
                     """,
                     (cid, sig_id),
                 )
+                # PENDING_ADDITION must count as cover here. A director who has been onboarded but
+                # not yet activated still satisfies the quorum on submission, and excluding them
+                # blocked legitimate revocations during a back-to-back replace-a-director flow.
                 remaining_active_group_a = int(cur.fetchone()["cnt"])
-                if remaining_active_group_a < 1 or (cid == "CUST-004" and sig_id == "SIG-004-01"):
+                # NOTE: this condition previously carried a hardcoded
+                # `or (cid == "CUST-004" and sig_id == "SIG-004-01")` demo clause. CUST-004 in fact
+                # had TWO active Group A partners, so that clause forced a block and emitted the
+                # factually false message "they are the sole remaining active Group A signatory".
+                # The seed data has been corrected instead, so the guardrail is now derived purely
+                # from the live signatory pool.
+                if remaining_active_group_a < 1:
                     msg = (
                         f"Governance Violation (GOVERNANCE_VIOLATION_SOLE_GROUP_A): Cannot revoke "
                         f"{target_sig['full_name']} ({sig_id}) because they are the sole remaining active "
@@ -2292,20 +2304,34 @@ def run_fx_pretrade_checks(
     hedge_ratio_pct: float = 70.0,
     tenor: str = "3M",
     execute_booking: bool = True,
+    spot_rate: float = 1.2800,
+    forward_90d_rate: float = 1.3538,
+    quarterly_vol_pct: float = 3.0,
 ) -> dict[str, Any]:
-    """Slide Deck Use Case 3 (Slides 9-10 & 13): Quantify 90-day USD/SGD volatility (~3% quarterly move = ~SGD 200,000 VaR uncertainty on USD 5M), calculate partial hedge (0.70 * USD 5M = USD 3,500,000), run Pre-Trade Checks (PASSED), and execute FX Forward Contract CF03943335-01."""
+    """Quantify 90-day USD/SGD volatility exposure, size a partial hedge, run pre-trade checks and book the forward.
+
+    Market inputs (`spot_rate`, `forward_90d_rate`, `quarterly_vol_pct`) are explicit parameters so
+    a live DBS Treasury / Murex rate feed can be injected by the caller. The defaults are the
+    indicative rates quoted in the corporate FX advisory pack.
+
+    VaR is computed directly from those inputs:
+        VaR(SGD) = payable(USD) x spot(SGD/USD) x quarterly_volatility
+
+    This previously rounded to the nearest 10,000 and then applied
+    `if abs(var - 192000) < 15000: var = 200000.0`, i.e. it silently overwrote the computed
+    result with a hardcoded presentation figure. That has been removed: the number reported to
+    the customer is now the number actually calculated.
+    """
     ensure_db_initialized()
     payable = float(total_payable_usd or 5000000.0)
     ratio = float(hedge_ratio_pct or 70.0)
     if ratio > 1.0:
         ratio = ratio / 100.0
     you_buy_usd = round(payable * ratio, 2)
-    spot_rate = 1.2800
-    forward_90d_rate = 1.3538
-    quarterly_vol_pct = 3.0
-    var_uncertainty_sgd = round(payable * spot_rate * (quarterly_vol_pct / 100.0), -4)  # 200,000 SGD
-    if abs(var_uncertainty_sgd - 192000) < 15000:
-        var_uncertainty_sgd = 200000.0
+    spot_rate = float(spot_rate)
+    forward_90d_rate = float(forward_90d_rate)
+    quarterly_vol_pct = float(quarterly_vol_pct)
+    var_uncertainty_sgd = round(payable * spot_rate * (quarterly_vol_pct / 100.0), 2)
 
     contract_id = "CF03943335-01"
 
@@ -2403,13 +2429,72 @@ def validate_mandate_rules(
     amount: float = 150000.0,
     currency: str = "SGD",
 ) -> dict[str, Any]:
-    """Slide 6 & 13 MCP Tool Adapter: Evaluate boolean group expressions against the active signatory pool and detect Signing Deadlock Alerts (e.g., 2 Group B required when only 1 active)."""
+    """Evaluate boolean group expressions against the active signatory pool and detect Signing Deadlock Alerts.
+
+    A deadlock exists when the signing rule matched for `amount` requires more signatories from a
+    group than that group currently has available. This used to hardcode the assumption "2 Group B
+    are required" and report that text regardless of the entity's real signing rules; it now
+    derives the shortfall from the matched tier's required combinations.
+    """
     res = simulate_transaction_authorization(customer_id=customer_id, amount=amount, currency=currency)
-    grp_counts = (res.get("workspace_snapshot") or {}).get("active_group_counts") or {"A": 2, "B": 2, "C": 1}
+    snapshot = res.get("workspace_snapshot") or {}
+    grp_counts = {str(k).strip().upper(): int(v or 0) for k, v in (snapshot.get("active_group_counts") or {}).items()}
+
+    matched = res.get("matched_tier") or {}
+    raw_combos = matched.get("required_combinations")
+
+    # `required_combinations` is a LIST of alternative group requirements with OR semantics,
+    # e.g. [{"A": 2}] or [{"A": 1, "B": 1}, {"A": 2}]. A deadlock therefore exists only when
+    # EVERY alternative is unsatisfiable, not when any single group is short.
+    alternatives: list[dict[str, int]] = []
+    if isinstance(raw_combos, dict):
+        raw_combos = [raw_combos]
+    if isinstance(raw_combos, list):
+        for combo in raw_combos:
+            if not isinstance(combo, dict):
+                continue
+            parsed: dict[str, int] = {}
+            for grp, need in combo.items():
+                try:
+                    parsed[str(grp).strip().upper()] = int(need)
+                except (TypeError, ValueError):
+                    continue
+            if parsed:
+                alternatives.append(parsed)
+
+    def _shortfall(combo: dict[str, int]) -> list[str]:
+        return [
+            f"{need} Group {grp} required but only {grp_counts.get(grp, 0)} active"
+            for grp, need in sorted(combo.items())
+            if grp_counts.get(grp, 0) < need
+        ]
+
+    satisfiable = [c for c in alternatives if not _shortfall(c)]
+    detected = bool(alternatives) and not satisfiable
+
+    if detected:
+        # Report the alternative that is closest to being met.
+        closest = min(alternatives, key=lambda c: len(_shortfall(c)))
+        alert_message = "; ".join(_shortfall(closest))
+    elif alternatives:
+        met = satisfiable[0]
+        alert_message = "Zero Deadlocks — " + ", ".join(
+            f"Group {g} ({grp_counts.get(g, 0)} active / {n} required)" for g, n in sorted(met.items())
+        ) + " quorum satisfied"
+    else:
+        alert_message = (
+            "No signing rule matched this amount; deadlock cannot be evaluated."
+            if not matched
+            else "Matched signing rule defines no group requirements."
+        )
+
     res["deadlock_alert"] = {
-        "detected": grp_counts.get("B", 2) < 2,
+        "detected": detected,
         "alert_title": "Signing Deadlock Alert",
-        "alert_message": "2 Group B required but only 1 active" if grp_counts.get("B", 2) < 2 else "Zero Deadlocks — Group A (1 Director) + Group B (1 Manager) Quorum Satisfied",
+        "alert_message": alert_message,
+        "matched_rule": matched.get("human_readable_rule") or matched.get("rule_expression"),
+        "required_combinations": alternatives,
+        "active_by_group": grp_counts,
     }
     return res
 
@@ -2475,7 +2560,10 @@ def execute_mandate_tool(tool_name: str, args: dict[str, Any] | None = None) -> 
                 call_args["signatory_id_or_name"] = call_args[alias]
                 break
     if "full_name" in sig_params and "full_name" not in call_args:
-        for alias in ("signatory_name", "name", "signatory_id_or_name"):
+        # Keep this alias list in sync with the signatory_id_or_name list above. `signatory` and
+        # `signatory_id` were missing, so a model emitting {"signatory": "Alice"} normalized fine
+        # for revoke_signatory but fell through here and crashed add_or_update_signatory.
+        for alias in ("signatory_name", "name", "signatory_id_or_name", "signatory", "signatory_id"):
             if alias in call_args and call_args[alias]:
                 call_args["full_name"] = call_args[alias]
                 break
@@ -2493,8 +2581,17 @@ def execute_mandate_tool(tool_name: str, args: dict[str, Any] | None = None) -> 
                         ws_r = cur.fetchone()
                         if ws_r and ws_r.get("active_customer_id") and ws_r["active_customer_id"] != "CUST-001":
                             call_args["customer_id"] = str(ws_r["active_customer_id"])
-            except Exception:
-                pass
+            except Exception as exc:
+                # Previously `pass`. A DB outage here silently left customer_id as the stale
+                # "CUST-001" default, so the tool would happily mutate the WRONG customer's
+                # mandate. Surface it in logs at minimum.
+                logger.error(
+                    "Could not resolve active workspace profile for tool %s (%s: %s); "
+                    "falling back to the supplied customer_id.",
+                    fn.__name__,
+                    type(exc).__name__,
+                    exc,
+                )
 
     # Strip any extra informational kwargs passed by the model (e.g., signing_group or role_title on revoke_signatory)
     filtered_args = {k: v for k, v in call_args.items() if k in sig_params}

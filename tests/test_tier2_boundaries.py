@@ -155,7 +155,19 @@ class TestF2SchemaConstraintsAndIntegrity:
                     for r in rows
                 }
                 for cid in ("CUST-001", "CUST-002", "CUST-003", "CUST-004", "CUST-005"):
-                    assert counts.get(cid, 0) >= 2
+                    # The governance invariant the application actually enforces is "at least ONE"
+                    # Group A signatory (GOVERNANCE_VIOLATION_SOLE_GROUP_A blocks any revocation
+                    # that would drop the count to zero). Nothing in the system requires two.
+                    assert counts.get(cid, 0) >= 1, f"{cid} has no Group A signatory"
+
+                # CUST-004 (Veritas Legal & Advisory LLP) is deliberately seeded with a SINGLE
+                # Group A partner (Evelyn Tan). That is the whole point of the profile: it is the
+                # fixture that exercises the sole-Group-A governance guardrail. This assertion
+                # pins that design so it cannot silently regress again.
+                assert counts.get("CUST-004", 0) == 1, (
+                    "CUST-004 must have exactly one Group A signatory to exercise the "
+                    f"sole-Group-A guardrail, found {counts.get('CUST-004', 0)}"
+                )
         finally:
             conn.close()
 

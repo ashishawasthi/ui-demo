@@ -18,7 +18,16 @@ if [ ! -x "${PG_ROOT}/usr/lib/postgresql/18/bin/postgres" ]; then
   (
     cd "${PG_BASE}/debs"
     apt-get download postgresql-18 postgresql-client-18 libpq5 >/dev/null
-    for deb in *.deb; do
+    # Without nullglob, an empty match leaves the literal string "*.deb" and the loop below
+    # runs `dpkg -x '*.deb'`, which fails with a confusing "cannot access archive" error
+    # instead of reporting that the download produced nothing.
+    shopt -s nullglob
+    debs=( *.deb )
+    if [ ${#debs[@]} -eq 0 ]; then
+      echo "[pg-bootstrap] ERROR: apt-get download produced no .deb files in ${PG_BASE}/debs." >&2
+      exit 1
+    fi
+    for deb in "${debs[@]}"; do
       dpkg -x "$deb" "${PG_ROOT}"
     done
   )

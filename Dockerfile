@@ -50,4 +50,11 @@ RUN chmod +x /app/scripts/*.sh
 
 EXPOSE 8080
 
+# Without a healthcheck, a wedged app (e.g. a Postgres deadlock hanging every request) still
+# looks "running" to Docker/orchestrators because the process is alive.
+# Note: Cloud Run ignores HEALTHCHECK and uses its own startup/liveness probes, but this makes
+# local `docker run` and any Compose/Swarm/K8s usage behave correctly.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
+  CMD curl -fsS "http://127.0.0.1:${PORT}/api/health" || exit 1
+
 ENTRYPOINT ["/app/scripts/docker_entrypoint.sh"]

@@ -31,9 +31,20 @@
     activeAssistantBubble: null,
     activeUserVoiceBubble: null,
     toolCardMap: {},
-    aiStudioWs: null,
-    aiStudioConnected: false,
+    // AI Studio API key is still used by the settings panel to configure the backend.
     aiStudioApiKey: '',
+    // --- Voice call state ---------------------------------------------------
+    // These were previously created ad-hoc on first assignment, so the full set of
+    // voice-call state was invisible here and easy to typo (a misspelled property
+    // silently reads back as undefined rather than failing).
+    isRinging: false,
+    isGreetingInProgress: false,
+    isVoiceMuted: false,
+    lastPlaybackEndTime: 0,
+    lastVoiceSpeechAt: 0,
+    // Last real `fx_hedge_card` returned by the FX pre-trade tool. The UC3 chart is rendered
+    // from this; it is never populated with placeholder rates.
+    lastFxHedgeCard: null,
   };
 
   // ==========================================================================
@@ -81,6 +92,17 @@
     } catch (_) {
       return `${currency} ${num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     }
+  }
+
+  // Unambiguous "CODE 1,234,567" formatting. `formatCurrency` above delegates to the en-SG
+  // locale, which renders SGD as a bare "$" and USD as "US$" - fine in isolation, but on the FX
+  // panel a USD payable and an SGD VaR sit next to each other and both collapse to dollar signs.
+  function formatMoneyCode(amount, currency = 'SGD', decimals = 0) {
+    const num = Number(amount || 0);
+    return `${currency} ${num.toLocaleString('en-US', {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    })}`;
   }
 
   function escapeHtml(val) {
@@ -1407,6 +1429,11 @@
     if (p1) p1.style.display = uc === 'UC1_MANDATE' ? 'block' : 'none';
     if (p2) p2.style.display = uc === 'UC2_PAYMENT' ? 'block' : 'none';
     if (p3) p3.style.display = uc === 'UC3_FX' ? 'block' : 'none';
+    // Re-hydrate the FX chart on tab-back; the host div is otherwise left showing the
+    // "awaiting quote" placeholder even though a real hedge was already booked.
+    if (uc === 'UC3_FX' && state.lastFxHedgeCard) {
+      renderUc3FxAdvisoryPanel(state.lastFxHedgeCard);
+    }
 
     document.querySelectorAll('.uc-tab-btn').forEach((btn) => {
       const isMatch = btn.getAttribute('data-usecase') === uc;
@@ -1441,6 +1468,34 @@
         vBox.style.opacity = pc.is_bec_fraud_flagged ? '0.45' : '1';
         bBox.style.opacity = pc.is_bec_fraud_flagged ? '1' : '0.45';
       }
+    }
+
+    if (syncPayload.fx_hedge_card) {
+      const fx = syncPayload.fx_hedge_card;
+      renderUc3FxAdvisoryPanel(fx);
+
+      // Right-hand pre-trade widget: these were static literals in index.html, so the booked
+      // trade and the displayed trade could disagree.
+      const buyEl = document.getElementById('uc3YouBuyVal');
+      const mathEl = document.getElementById('uc3HedgeMathVal');
+      const tenorEl = document.getElementById('uc3TenorRateVal');
+      const contractEl = document.getElementById('uc3ContractIdVal');
+      const badgeEl = document.getElementById('uc3PretradeBadge');
+      const ratio = Number(fx.hedge_ratio_pct) || 0;
+      const payable = Number(fx.total_payable_usd) || 0;
+      const buy = Number(fx.you_buy_usd) || 0;
+      const fwd = Number(fx.forward_90d_rate);
+      if (buyEl) buyEl.textContent = formatMoneyCode(buy, 'USD');
+      if (mathEl) {
+        mathEl.innerHTML = `${escapeHtml((ratio / 100).toFixed(2))} &times; ${escapeHtml(formatMoneyCode(payable, 'USD'))} = <strong>${escapeHtml(formatMoneyCode(buy, 'USD'))}</strong>`;
+      }
+      if (tenorEl) {
+        tenorEl.textContent = `${fx.tenor || '3M'} @ ${isFinite(fwd) ? fwd.toFixed(4) : '--'}`;
+      }
+      if (contractEl) {
+        contractEl.textContent = `Contract ID: ${fx.contract_id || '--'}${fx.booked ? ' \u2713' : ''}`;
+      }
+      if (badgeEl) badgeEl.textContent = `Pre-Trade Checks: ${fx.pretrade_checks || 'PENDING'}`;
     }
 
     const updatedProfileId = syncPayload.updated_profile_id || syncPayload.active_profile_id || syncPayload.customer_id;
@@ -1663,6 +1718,186 @@
     `;
   }
 
+  // ---------------------------------------------------------------------------
+  // USD/SGD 90-day volatility cone (UC3, Slides 9-10)
+  // ---------------------------------------------------------------------------
+  // The chart this replaces was a hand-written static SVG whose trajectory was drawn with a
+  // `M ... Q ... T ... T ... T ...` chain. Every `T` reflects the *previous* control point, so
+  // the amplitude compounded with each segment until the curve ran off the top and bottom of the
+  // 150px viewBox and was clipped - that is the broken render. It was also decorative: the
+  // squiggle encoded no data at all and the rates printed beside it were hardcoded literals, so
+  // it never reflected the trade that was actually booked.
+  //
+  // This version plots what the VaR number actually means: the +/- sigma cone around spot,
+  // widening with the square root of time (the standard volatility scaling), against the flat
+  // 90-day forward rate that removes that uncertainty. Every value comes from the FX pre-trade
+  // tool result, and every coordinate is produced by an explicit domain -> pixel scale, so no
+  // point can fall outside the plot box.
+  function buildFxVolatilityConeSvg(fx, opts) {
+    const o = opts || {};
+    const card = fx || {};
+    const spot = Number(card.spot_rate);
+    const fwd = Number(card.forward_90d_rate);
+    const volPct = Number(card.quarterly_volatility_pct);
+    if (!isFinite(spot) || !isFinite(fwd) || !isFinite(volPct) || spot <= 0) return '';
+
+    const compact = Boolean(o.compact);
+    const W = o.width || 480;
+    const H = o.height || 196;
+    const padL = o.padL != null ? o.padL : (compact ? 8 : 12);
+    const padR = o.padR != null ? o.padR : (compact ? 54 : 78);
+    const padT = o.padT != null ? o.padT : (compact ? 12 : 30);
+    const padB = o.padB != null ? o.padB : (compact ? 12 : 26);
+    const x0 = padL;
+    const x1 = W - padR;
+    const y0 = padT;
+    const y1 = H - padB;
+    const uid = `fxcone${Math.random().toString(36).slice(2, 9)}`;
+
+    const sigma = volPct / 100;
+    const up90 = spot * (1 + sigma);
+    const dn90 = spot * (1 - sigma);
+
+    // Domain must cover the cone AND the forward rate (which can sit outside the cone when the
+    // forward premium exceeds one quarterly sigma, as it does at 1.3538 vs 1.2800 +/- 3%).
+    const lo = Math.min(dn90, fwd, spot);
+    const hi = Math.max(up90, fwd, spot);
+    const span = (hi - lo) || spot * 0.01;
+    const dLo = lo - span * 0.22;
+    const dHi = hi + span * 0.22;
+
+    const yOf = (v) => y1 - ((v - dLo) / (dHi - dLo)) * (y1 - y0);
+    const xOf = (day) => x0 + (Math.min(Math.max(day, 0), 90) / 90) * (x1 - x0);
+    const r4 = (v) => v.toFixed(4);
+
+    // Volatility scales with sqrt(t): sigma(t) = sigma_quarter * sqrt(t / 90).
+    const upper = [];
+    const lower = [];
+    for (let day = 0; day <= 90; day += 3) {
+      const s = sigma * Math.sqrt(day / 90);
+      upper.push(`${xOf(day).toFixed(2)} ${yOf(spot * (1 + s)).toFixed(2)}`);
+      lower.push(`${xOf(day).toFixed(2)} ${yOf(spot * (1 - s)).toFixed(2)}`);
+    }
+    const conePath = `M ${upper.join(' L ')} L ${lower.reverse().join(' L ')} Z`;
+    const upperPath = `M ${upper.join(' L ')}`;
+
+    const ySpot = yOf(spot);
+    const yFwd = yOf(fwd);
+    // Keep the two right-hand value pills from overlapping when spot and forward are close.
+    const pillH = compact ? 15 : 20;
+    let yFwdPill = yFwd;
+    let ySpotPill = ySpot;
+    if (Math.abs(yFwdPill - ySpotPill) < pillH + 2) {
+      const mid = (yFwdPill + ySpotPill) / 2;
+      const half = (pillH + 2) / 2;
+      yFwdPill = yFwd <= ySpot ? mid - half : mid + half;
+      ySpotPill = yFwd <= ySpot ? mid + half : mid - half;
+    }
+    const pillX = x1 + 5;
+    const pillW = compact ? 46 : 66;
+    const pillFont = compact ? 9.5 : 11;
+
+    const axisTicks = compact
+      ? ''
+      : [0, 30, 60, 90]
+          .map((d) => {
+            const anchor = d === 0 ? 'start' : d === 90 ? 'end' : 'middle';
+            return `<text x="${xOf(d).toFixed(1)}" y="${(y1 + 15).toFixed(1)}" font-size="9.5" font-weight="600" fill="#6B7280" text-anchor="${anchor}">${d === 0 ? 'Today' : `+${d}d`}</text>`;
+          })
+          .join('');
+
+    const fwdCaption = compact
+      ? ''
+      : `<text x="${(x0 + 4).toFixed(1)}" y="${Math.max(y0 - 8, yFwd - 7).toFixed(1)}" font-size="9.5" font-weight="700" fill="#FCA5A5">90-DAY FORWARD LOCK &#183; REMOVES THE BAND BELOW</text>`;
+
+    const sigmaLabels = compact
+      ? ''
+      : `<text x="${(x1 - 4).toFixed(1)}" y="${(yOf(up90) - 5).toFixed(1)}" font-size="9" font-weight="700" fill="#FCA5A5" text-anchor="end">+${volPct}&#37; &#183; ${r4(up90)}</text>
+         <text x="${(x1 - 4).toFixed(1)}" y="${(yOf(dn90) + 11).toFixed(1)}" font-size="9" font-weight="700" fill="#FCA5A5" text-anchor="end">&#8722;${volPct}&#37; &#183; ${r4(dn90)}</text>`;
+
+    return `
+      <svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" role="img"
+           aria-label="USD to SGD ninety day volatility cone around spot ${r4(spot)} against a forward lock at ${r4(fwd)}"
+           style="display:block; background:#1F2937; border-radius:10px;">
+        <defs>
+          <linearGradient id="${uid}fill" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stop-color="#F87171" stop-opacity="0.05"></stop>
+            <stop offset="100%" stop-color="#F87171" stop-opacity="0.30"></stop>
+          </linearGradient>
+          <clipPath id="${uid}clip">
+            <rect x="${x0}" y="${y0 - 2}" width="${x1 - x0}" height="${y1 - y0 + 4}"></rect>
+          </clipPath>
+        </defs>
+
+        <g clip-path="url(#${uid}clip)">
+          <path d="${conePath}" fill="url(#${uid}fill)" stroke="none"></path>
+          <path d="${upperPath}" fill="none" stroke="#F87171" stroke-width="1.4" stroke-dasharray="4 3"></path>
+          <path d="${`M ${lower.join(' L ')}`}" fill="none" stroke="#F87171" stroke-width="1.4" stroke-dasharray="4 3"></path>
+          <line x1="${x0}" y1="${ySpot.toFixed(2)}" x2="${x1}" y2="${ySpot.toFixed(2)}" stroke="#60A5FA" stroke-width="${compact ? 1.6 : 2.2}"></line>
+          <line x1="${x0}" y1="${yFwd.toFixed(2)}" x2="${x1}" y2="${yFwd.toFixed(2)}" stroke="#EF4444" stroke-width="${compact ? 1.8 : 2.5}"></line>
+        </g>
+
+        <line x1="${x0}" y1="${y1}" x2="${x1}" y2="${y1}" stroke="#374151" stroke-width="1"></line>
+        <circle cx="${x0}" cy="${ySpot.toFixed(2)}" r="${compact ? 3 : 4.5}" fill="#3B82F6" stroke="#111827" stroke-width="1.5"></circle>
+        ${fwdCaption}
+        ${sigmaLabels}
+        ${axisTicks}
+
+        <rect x="${pillX}" y="${(yFwdPill - pillH / 2).toFixed(2)}" width="${pillW}" height="${pillH}" rx="4" fill="#DC2626"></rect>
+        <text x="${pillX + pillW / 2}" y="${(yFwdPill + pillFont / 2.9).toFixed(2)}" font-size="${pillFont}" font-weight="700" fill="#FFFFFF" text-anchor="middle" font-family="ui-monospace, monospace">${r4(fwd)}</text>
+
+        <rect x="${pillX}" y="${(ySpotPill - pillH / 2).toFixed(2)}" width="${pillW}" height="${pillH}" rx="4" fill="#0F172A" stroke="#475569"></rect>
+        <text x="${pillX + pillW / 2}" y="${(ySpotPill + pillFont / 2.9).toFixed(2)}" font-size="${pillFont}" font-weight="700" fill="#93C5FD" text-anchor="middle" font-family="ui-monospace, monospace">${r4(spot)}</text>
+      </svg>
+    `;
+  }
+
+  // Renders the whole left-hand dark FX card (header figures + cone chart + VaR footnote) from a
+  // real `fx_hedge_card`. Previously these figures were static markup in index.html.
+  function renderUc3FxAdvisoryPanel(fxCard) {
+    const host = document.getElementById('uc3FxChartHost');
+    if (!host) return;
+    const fx = fxCard || state.lastFxHedgeCard;
+    if (!fx || !isFinite(Number(fx.spot_rate))) return;
+    state.lastFxHedgeCard = fx;
+
+    const payable = Number(fx.total_payable_usd) || 0;
+    const varSgd = Number(fx.var_uncertainty_sgd) || 0;
+    const volPct = Number(fx.quarterly_volatility_pct) || 0;
+    const fwd = Number(fx.forward_90d_rate) || 0;
+    const chart = buildFxVolatilityConeSvg(fx);
+    if (!chart) return;
+
+    host.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:12px;">
+        <div>
+          <div style="font-size:11px; color:#9CA3AF; text-transform:uppercase; font-weight:700;">Dynamic UI Target State &middot; USD/SGD 90-Day Exposure</div>
+          <div style="font-size:18px; font-weight:700; margin-top:2px; line-height:1.35;">
+            ${escapeHtml(formatMoneyCode(payable, 'USD'))} Payable &middot;
+            <span style="color:#F87171; white-space:nowrap;">${escapeHtml(formatMoneyCode(varSgd, 'SGD'))} VaR</span>
+          </div>
+        </div>
+        <span style="background:#DC2626; color:#FFFFFF; padding:4px 10px; border-radius:6px; font-family:var(--font-mono); font-size:12px; font-weight:700; white-space:nowrap;">90D Fwd Lock: ${escapeHtml(fwd.toFixed(4))}</span>
+      </div>
+
+      ${chart}
+
+      <div style="display:flex; flex-wrap:wrap; gap:14px; margin-top:10px; font-size:10.5px; color:#9CA3AF; font-weight:600;">
+        <span><span style="display:inline-block; width:16px; height:2.5px; background:#EF4444; vertical-align:middle; margin-right:5px;"></span>90D Forward Lock</span>
+        <span><span style="display:inline-block; width:16px; height:2.5px; background:#60A5FA; vertical-align:middle; margin-right:5px;"></span>Spot</span>
+        <span><span style="display:inline-block; width:16px; height:8px; background:rgba(248,113,113,0.28); border:1px dashed #F87171; vertical-align:middle; margin-right:5px;"></span>&plusmn;${escapeHtml(String(volPct))}&#37; Unhedged Band</span>
+      </div>
+
+      <div style="margin-top:12px; background:#1F2937; border:1px solid #374151; border-radius:8px; padding:10px 14px; font-size:12.5px; color:#E5E7EB; line-height:1.55;">
+        <strong>Quant VaR Analysis:</strong> ${escapeHtml(String(volPct))}&#37; quarterly USD/SGD movement on a
+        ${escapeHtml(formatMoneyCode(payable, 'USD'))} payable =
+        <strong>${escapeHtml(formatMoneyCode(varSgd, 'SGD'))} of cash-flow uncertainty</strong>
+        (${escapeHtml(formatMoneyCode(payable, 'USD'))} &times; ${escapeHtml(Number(fx.spot_rate).toFixed(4))} &times; ${escapeHtml(String(volPct))}&#37;).
+        Locking the 90-Day Forward at ${escapeHtml(fwd.toFixed(4))} or SecureFX removes that band today.
+      </div>
+    `;
+  }
+
   function renderA2UIWidgetHtml(toolName, args, resultObj) {
     if (!resultObj) return '';
     const tName = String(toolName || '').toLowerCase();
@@ -1702,39 +1937,46 @@
       `;
     }
 
-    // 0B. Slide Deck Use Case 3 (Slides 9-10): FX Volatility VaR (~SGD 200K) & 70% Forward Hedge (CF03943335-01)
+    // 0B. Slide Deck Use Case 3 (Slides 9-10): FX Volatility VaR & Partial Forward Hedge
+    // Every figure below is read off the tool result. It previously printed hardcoded literals
+    // ("USD 3,500,000", "1.3538", "Spot 1.2800", "~SGD 200,000"), so the card showed the same
+    // numbers no matter what hedge ratio, payable or rates the trade was actually booked at.
     if (tName.includes('fx_pretrade') || tName.includes('book_fx') || resultObj.fx_hedge_card) {
       const fx = resultObj.fx_hedge_card || {};
+      const fxPayable = Number(fx.total_payable_usd) || 0;
+      const fxBuy = Number(fx.you_buy_usd) || 0;
+      const fxRatio = Number(fx.hedge_ratio_pct) || 0;
+      const fxSpot = Number(fx.spot_rate);
+      const fxFwd = Number(fx.forward_90d_rate);
+      const fxVol = Number(fx.quarterly_volatility_pct) || 0;
+      const fxVar = Number(fx.var_uncertainty_sgd) || 0;
+      const fxPassed = String(fx.pretrade_checks || '').toUpperCase() === 'PASSED';
+      const miniCone = buildFxVolatilityConeSvg(fx, { compact: true, width: 240, height: 76 });
       return `
-        <div class="a2ui-widget-card a2ui-green" data-a2ui-type="fx-hedge-card">
+        <div class="a2ui-widget-card ${fxPassed ? 'a2ui-green' : 'a2ui-red'}" data-a2ui-type="fx-hedge-card">
           <div class="a2ui-widget-header">
             <span class="a2ui-widget-title">&#x1F4C8; Quantitative FX Hedge &amp; Pre-Trade</span>
-            <span class="a2ui-pill green">Pre-Trade: PASSED</span>
+            <span class="a2ui-pill ${fxPassed ? 'green' : ''}">Pre-Trade: ${escapeHtml(fx.pretrade_checks || 'PENDING')}</span>
           </div>
           <div class="a2ui-kpi-grid">
             <div class="a2ui-kpi-box">
-              <div class="a2ui-kpi-label">You Buy (70% of $5M)</div>
-              <div class="a2ui-kpi-val">USD 3,500,000</div>
+              <div class="a2ui-kpi-label">You Buy (${escapeHtml(String(fxRatio))}&#37; of ${escapeHtml(formatMoneyCode(fxPayable, 'USD'))})</div>
+              <div class="a2ui-kpi-val">${escapeHtml(formatMoneyCode(fxBuy, 'USD'))}</div>
             </div>
             <div class="a2ui-kpi-box">
               <div class="a2ui-kpi-label">90D Fwd Lock vs Spot</div>
-              <div class="a2ui-kpi-val"><span style="color:#E31837;">1.3538</span> <span style="font-size:10.5px;color:#6B7280;">(Spot 1.2800)</span></div>
+              <div class="a2ui-kpi-val"><span style="color:#E31837;">${escapeHtml(isFinite(fxFwd) ? fxFwd.toFixed(4) : '--')}</span> <span style="font-size:10.5px;color:#6B7280;">(Spot ${escapeHtml(isFinite(fxSpot) ? fxSpot.toFixed(4) : '--')})</span></div>
             </div>
             <div class="a2ui-kpi-box">
               <div class="a2ui-kpi-label">VaR Uncertainty Removed</div>
-              <div class="a2ui-kpi-val" style="color:#059669;">~SGD 200,000 (3% Vol)</div>
+              <div class="a2ui-kpi-val" style="color:#059669;">${escapeHtml(formatMoneyCode(fxVar, 'SGD'))} <span style="font-size:10.5px;color:#6B7280;">(${escapeHtml(String(fxVol))}&#37; Vol)</span></div>
             </div>
             <div class="a2ui-kpi-box">
               <div class="a2ui-kpi-label">Executed Contract ID</div>
-              <div class="a2ui-kpi-val" style="font-family:var(--font-mono);color:#047857;">${escapeHtml(fx.contract_id || 'CF03943335-01')} &#x2713;</div>
+              <div class="a2ui-kpi-val" style="font-family:var(--font-mono);color:#047857;">${escapeHtml(fx.contract_id || '--')} ${fx.booked ? '&#x2713;' : ''}</div>
             </div>
           </div>
-          <svg width="100%" height="44" viewBox="0 0 240 44" style="background:#111827; border-radius:8px; display:block; padding:4px;">
-            <line x1="10" y1="14" x2="185" y2="14" stroke="#EF4444" stroke-width="2"></line>
-            <text x="190" y="17" font-size="9.5" font-weight="700" fill="#FCA5A5">1.3538</text>
-            <path d="M 10 34 Q 35 12, 65 28 T 125 22 T 185 35" fill="none" stroke="#60A5FA" stroke-width="2"></path>
-            <text x="190" y="37" font-size="9.5" font-weight="700" fill="#93C5FD">1.2800</text>
-          </svg>
+          ${miniCone}
         </div>
       `;
     }
@@ -2146,112 +2388,16 @@
     draw();
   }
 
-  function connectDirectAiStudioLiveSession() {
-    return new Promise((resolve) => {
-      const apiKey = (
-        (document.getElementById('aiStudioApiKeyInput') &&
-          document.getElementById('aiStudioApiKeyInput').value.trim()) ||
-        state.aiStudioApiKey ||
-        ''
-      );
-      if (!apiKey) {
-        resolve(false);
-        return;
-      }
-
-      const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(apiKey)}`;
-      let settled = false;
-
-      try {
-        const aisWs = new WebSocket(url);
-        state.aiStudioWs = aisWs;
-
-        aisWs.onopen = () => {
-          const setupPayload = {
-            setup: {
-              model: 'models/gemini-3.8-live-extended-thinking',
-              generationConfig: {
-                responseModalities: ['AUDIO'],
-                thinkingConfig: {
-                  thinkingLevel: 'LOW',
-                },
-                speechConfig: {
-                  voiceConfig: {
-                    prebuiltVoiceConfig: {
-                      voiceName: 'Aoede',
-                    },
-                  },
-                },
-              },
-              systemInstruction: {
-                parts: [
-                  {
-                    text: `You are the Corporate Mandate AI Advisor for ${state.activeCustomerId || 'CUST-001'}. Speak concisely in 1-2 sentences and never repeat yourself.`,
-                  },
-                ],
-              },
-            },
-          };
-          aisWs.send(JSON.stringify(setupPayload));
-        };
-
-        aisWs.onmessage = async (ev) => {
-          try {
-            let rawText = ev.data;
-            if (rawText instanceof Blob) {
-              rawText = await rawText.text();
-            }
-            const data = JSON.parse(rawText);
-            if (data.setupComplete) {
-              state.aiStudioConnected = true;
-              if (!settled) {
-                settled = true;
-                resolve(true);
-              }
-              return;
-            }
-            if (data.serverContent && data.serverContent.modelTurn && data.serverContent.modelTurn.parts) {
-              for (const part of data.serverContent.modelTurn.parts) {
-                if (part.inlineData && part.inlineData.data) {
-                  handleWebSocketMessage({
-                    type: 'audio_out',
-                    pcm24_base64: part.inlineData.data,
-                    sample_rate: 24000,
-                  });
-                }
-              }
-            }
-          } catch (_) {}
-        };
-
-        aisWs.onerror = () => {
-          state.aiStudioConnected = false;
-          if (!settled) {
-            settled = true;
-            resolve(false);
-          }
-        };
-
-        aisWs.onclose = () => {
-          state.aiStudioConnected = false;
-          state.aiStudioWs = null;
-          if (!settled) {
-            settled = true;
-            resolve(false);
-          }
-        };
-
-        setTimeout(() => {
-          if (!settled) {
-            settled = true;
-            resolve(state.aiStudioConnected);
-          }
-        }, 1200);
-      } catch (_) {
-        resolve(false);
-      }
-    });
-  }
+  // NOTE: connectDirectAiStudioLiveSession() was removed here.
+  //
+  // It opened a browser-direct WebSocket to the AI Studio Live API and streamed raw
+  // microphone audio into it -- including the WebAudio ringer tone and room noise -- under a
+  // minimal system prompt with no role lock. The model interpreted that noise as speech and
+  // hallucinated the CUSTOMER's side of the call ("Hey Joy, I need to change my supplier..."),
+  // which is what made Joy appear to role-play the caller instead of greeting them.
+  //
+  // All voice now flows through the backend /ws/live session, which applies the ROLE LOCK
+  // system instruction, noise filtering and the verbatim greeting narrator.
 
   function updateCallControlIcons() {
     const callBtn = document.getElementById('voiceMicToggleBtn');
@@ -2517,11 +2663,6 @@
     if (state.micAudioCtx) {
       state.micAudioCtx.close().catch(() => {});
       state.micAudioCtx = null;
-    }
-    if (state.aiStudioWs) {
-      try { state.aiStudioWs.close(); } catch (_) {}
-      state.aiStudioWs = null;
-      state.aiStudioConnected = false;
     }
     if (state.ws && state.ws.readyState === WebSocket.OPEN) {
       state.ws.send(JSON.stringify({ type: 'audio_stream_end' }));

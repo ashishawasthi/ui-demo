@@ -79,7 +79,21 @@ async def run_chrome_cdp_e2e() -> None:
                         return data.get("result", {})
 
             async def eval_js(expr: str):
-                res = await cdp_call("Runtime.evaluate", {"expression": expr, "returnByValue": True, "awaitPromise": True})
+                res = await cdp_call(
+                    "Runtime.evaluate",
+                    {"expression": expr, "returnByValue": True, "awaitPromise": True},
+                )
+                # Runtime.evaluate reports JS errors in `exceptionDetails` rather than failing.
+                # Without this check, `.get("value")` quietly returns None and assertions such as
+                # `document.getElementById('x').click()` "pass" even when the element is absent.
+                if "exceptionDetails" in res:
+                    details = res["exceptionDetails"]
+                    text = (
+                        (details.get("exception") or {}).get("description")
+                        or details.get("text")
+                        or json.dumps(details)
+                    )
+                    raise RuntimeError(f"JavaScript error evaluating {expr!r}: {text}")
                 return res.get("result", {}).get("value")
 
             async def save_screenshot(out_path: str):
@@ -262,8 +276,25 @@ def run_eval_suite() -> None:
     assert uc3_fx.get("pretrade_checks") == "PASSED"
     assert uc3_fx.get("you_buy_usd") == 3500000.0
     assert uc3_fx.get("contract_id") == "CF03943335-01"
-    assert uc3_fx["fx_hedge_card"]["var_uncertainty_sgd"] == 200000.0
-    print("[PASS] EVAL-08: Slide 9-10 Quantitative FX Hedge verified (~SGD 200K VaR, 0.70 * USD 5M = USD 3,500,000, Pre-Trade PASSED & Contract CF03943335-01).")
+    # VaR must equal the value the documented formula actually produces:
+    #   payable(USD) x spot(SGD/USD) x quarterly_volatility = 5,000,000 x 1.2800 x 0.03
+    # The previous assertion expected 200,000.0, which was only ever reachable because the tool
+    # snapped its own result to that constant. Recompute independently and compare.
+    _card = uc3_fx["fx_hedge_card"]
+    _expected_var = round(
+        float(_card["total_payable_usd"]) * float(_card["spot_rate"])
+        * (float(_card["quarterly_volatility_pct"]) / 100.0),
+        2,
+    )
+    assert _card["var_uncertainty_sgd"] == _expected_var, (
+        f"VaR {_card['var_uncertainty_sgd']} != recomputed {_expected_var}"
+    )
+    assert 150000.0 <= _card["var_uncertainty_sgd"] <= 250000.0
+    print(
+        f"[PASS] EVAL-08: Slide 9-10 Quantitative FX Hedge verified "
+        f"(SGD {_card['var_uncertainty_sgd']:,.0f} VaR computed from real inputs, "
+        f"0.70 * USD 5M = USD 3,500,000, Pre-Trade PASSED & Contract CF03943335-01)."
+    )
 
     # EVAL-09: Headless Chrome CDP Verification of Dynamic Call Bar, UC2 Payment Canvas & UC3 FX Canvas
     http_json("POST", "/api/reset", {})
