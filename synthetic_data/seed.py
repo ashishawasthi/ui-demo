@@ -647,17 +647,17 @@ SIGNATORIES_SEED: list[dict[str, Any]] = [
         "individual_max_limit_sgd": 250000.00,
         "status": "ACTIVE",
     },
-    # CUST-004 (4 signatories: 2 Group A, 1 Group B, 1 Group C)
+    # CUST-004 (4 signatories: 1 Group A [Sole Managing Partner], 2 Group B, 1 Group C)
     {
         "signatory_id": "SIG-004-01",
         "customer_id": "CUST-004",
-        "full_name": "Arjun Menon SC",
-        "role_title": "Senior Equity Partner",
+        "full_name": "Evelyn Tan",
+        "role_title": "Senior Managing Partner",
         "signing_group": "A",
         "id_type": "NRIC",
         "id_number_masked": "S****008A",
         "nationality": "SG",
-        "email": "arjun.menon@veritaslegal.sg",
+        "email": "evelyn.tan@veritaslegal.sg",
         "mobile_masked": "+65 9***1008",
         "auth_method": "IDEAL_DIGITAL_TOKEN",
         "ideal_status": "TOKEN_ACTIVE",

@@ -137,7 +137,7 @@ def build_system_instruction(customer_id: str = "CUST-001", current_stage: int =
         grp_counts = {"A": 2, "B": 2, "C": 1}
 
     return (
-        "You are the DBS IDEAL Corporate Banking Change of Account Mandate AI Copilot, "
+        "You are Joy, the DBS IDEAL Corporate Banking Change of Account Mandate Advisor, "
         f"powered by {LOGICAL_MODEL_ID}.\n"
         f"Current Active Corporate Entity: {company_name} ({customer_id}, UEN: {uen}).\n"
         f"Current Active Signatory Counts: Group A={grp_counts.get('A', 0)}, "
@@ -145,15 +145,21 @@ def build_system_instruction(customer_id: str = "CUST-001", current_stage: int =
         f"Current UI Workspace Stage: Stage {current_stage} of 5.\n\n"
         "MANDATORY OPERATIONAL RULES:\n"
         "1. ALWAYS call the database-backed tools (`list_customer_profiles`, `get_customer_mandate_details`, "
-        "`SwitchActiveCustomerProfile`, `add_or_update_signatory`, `revoke_signatory`, `configure_signing_rules`, "
-        "`simulate_transaction_authorization`, `audit_board_resolution`, `submit_mandate_change_request`, "
-        "`update_target_accounts`, `execute_cosigner_signature`) whenever the user asks to inspect, switch, "
-        "add, update, revoke, configure, simulate, audit, or submit any corporate mandate data.\n"
-        "2. NEVER invent or hallucinate signatory names, balances, UENs, or application references — always "
-        "ground your response in the exact JSON returned by the PostgreSQL tool calls.\n"
-        "3. If `revoke_signatory` returns `GOVERNANCE_VIOLATION_SOLE_GROUP_A`, explain clearly that corporate "
-        "banking governance prohibits removing the sole remaining active Group A signatory.\n"
-        "4. Keep responses concise, executive, and clear for corporate treasurers and directors."
+        "`SwitchActiveCustomerProfile`, `add_or_update_signatory`, `upload_nric_and_add_signatory`, "
+        "`revoke_signatory`, `configure_signing_rules`, `simulate_transaction_authorization`, "
+        "`audit_board_resolution`, `submit_mandate_change_request`, `update_target_accounts`, "
+        "`execute_cosigner_signature`) whenever the user asks to inspect, switch, add, upload NRIC/OCR, "
+        "revoke, configure, simulate, audit, or submit any corporate mandate data.\n"
+        "2. When the user asks to switch corporate entity (e.g., 'Veritas Legal' / 'very task', 'Meridian', "
+        "'Apex', 'SingaPort', 'TechNova'), ALWAYS call `SwitchActiveCustomerProfile` first, and if they also "
+        "ask for a second action in the same turn (e.g., revoking or adding a signatory), pass the newly "
+        "switched entity's name/ID to the second tool.\n"
+        "3. GOVERNANCE QUORUM RULE: ONLY Group A requires a minimum of 1 active signatory (`GOVERNANCE_VIOLATION_SOLE_GROUP_A`). "
+        "Group B and Group C do NOT have any minimum signatory requirement — signatories in Group B or Group C "
+        "(such as Kenneth Yap in Group C) can ALWAYS be revoked! Never tell the user that Group B or Group C requires a minimum of 1 signatory.\n"
+        "4. CONCISE iCHAT + A2UI STYLE: The frontend automatically renders interactive A2UI visual cards, tables, "
+        "and SVG charts/graphs for every tool call. Therefore, keep your text/voice reply to 1–2 short, natural, "
+        "executive sentences. NEVER output raw markdown tables (`|---|---|`), `###` headings, or internal enum codes (`CUST-004`, `PARTNERSHIP_LLP`)."
     )
 
 
@@ -511,6 +517,11 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                                 )
                                 tool_res = execute_mandate_tool(t_name, t_args)
                                 ui_sync_obj = tool_res.get("ui_sync")
+                                if ui_sync_obj:
+                                    if ui_sync_obj.get("updated_profile_id"):
+                                        active_cid = str(ui_sync_obj["updated_profile_id"])
+                                    if ui_sync_obj.get("target_stage"):
+                                        active_stage = int(ui_sync_obj["target_stage"])
                                 compact_res = {
                                     k: v
                                     for k, v in tool_res.items()

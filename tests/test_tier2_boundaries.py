@@ -850,14 +850,14 @@ class TestF12Stage5CosignAndAuditBoundariesUI:
     def test_f12_b01_submit_with_custom_initiator_name_records_in_application(self, client):
         res = client.post(
             "/api/customers/CUST-004/submit",
-            json={"submitted_by": "Arjun Menon SC (Senior Partner)", "notes": "LLP Trust Mandate"},
+            json={"submitted_by": "Evelyn Tan (Senior Partner)", "notes": "LLP Trust Mandate"},
         ).json()
         assert res.get("status") == "success"
         app = res.get("application") or {}
-        assert "Arjun Menon" in app.get("submitted_by", "Arjun Menon")
+        assert "Evelyn Tan" in app.get("submitted_by", "Evelyn Tan")
 
     def test_f12_b02_cosign_updates_digisign_signers_status_to_signed(self, client):
-        sub = client.post("/api/customers/CUST-004/submit", json={"submitted_by": "Arjun Menon SC"}).json()
+        sub = client.post("/api/customers/CUST-004/submit", json={"submitted_by": "Evelyn Tan"}).json()
         cosign = client.post(
             "/api/customers/CUST-004/cosign",
             json={"application_ref": sub.get("application_ref"), "signer_name": "Beatrice Chee"},

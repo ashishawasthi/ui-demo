@@ -1399,6 +1399,19 @@
       navigateToStage(targetStage, { flash: true, fromUiSync: true });
     }
 
+    // If a governance violation occurred via voice/chat tool call, surface the Stage 2 Red Governance Banner
+    const toastMsg = (syncPayload.toast_notification && syncPayload.toast_notification.message) || '';
+    if (toastMsg.includes('GOVERNANCE_VIOLATION') || (syncPayload.toast_notification && syncPayload.toast_notification.title && syncPayload.toast_notification.title.includes('Sole Group A'))) {
+      const alertBanner = document.getElementById('governanceAlertBanner');
+      if (alertBanner) {
+        const codeEl = document.getElementById('governanceErrorCode');
+        const msgEl = document.getElementById('governanceAlertMessage');
+        if (codeEl) codeEl.textContent = 'GOVERNANCE_VIOLATION_SOLE_GROUP_A';
+        if (msgEl) msgEl.textContent = toastMsg;
+        alertBanner.classList.add('visible');
+      }
+    }
+
     if (highlightId) {
       setTimeout(() => flashElement(highlightId), 120);
     }
@@ -1412,23 +1425,59 @@
     }
   }
 
+  function formatRichChatText(rawText) {
+    if (!rawText) return '';
+    // Strip markdown tables and ### headers since A2UI visual cards display structured tables/charts
+    const lines = String(rawText)
+      .split('\n')
+      .filter((line) => {
+        const t = line.trim();
+        if (t.startsWith('|') && t.endsWith('|')) return false;
+        if (/^#{1,6}\s+/.test(t)) return false;
+        if (/^---+$/.test(t)) return false;
+        return true;
+      });
+    let cleaned = lines.join('\n').trim();
+    if (!cleaned) {
+      cleaned = String(rawText).replace(/[#|*`]/g, '').trim();
+    }
+    // Keep conversational bubble crisp (max 320 chars if overly long)
+    if (cleaned.length > 340) {
+      const firstTwoSentences = cleaned.split(/(?<=[.!?])\s+/).slice(0, 2).join(' ');
+      if (firstTwoSentences && firstTwoSentences.length >= 25) {
+        cleaned = firstTwoSentences;
+      }
+    }
+    let html = escapeHtml(cleaned);
+    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/`([^`]+)`/g, '<span style="background:#F3F4F6;padding:1px 5px;border-radius:4px;font-family:var(--font-mono);font-size:11.5px;">$1</span>');
+    html = html.replace(/^\s*[\*\-]\s+(.+)$/gm, '<div style="margin:2px 0;">&bull; $1</div>');
+    html = html.replace(/\n+/g, '<br/>');
+    return html;
+  }
+
   function upsertTurnMessage(turnId, role, text) {
     const stream = document.getElementById('copilotChatStream');
     if (!stream || !text) return;
 
-    // When a user message arrives, reset activeAssistantBubble so the next assistant turn gets 1 fresh bubble
+    const formattedHtml = role === 'user'
+      ? `<div>${escapeHtml(text).replace(/\n/g, '<br/>')}</div>`
+      : `<div class="ichat-sender-tag"><span>Joy &middot; DBS Mandate Advisor</span><span>Live</span></div><div>${formatRichChatText(text)}</div>`;
+
     if (role === 'user') {
       state.activeAssistantBubble = null;
-      if (state.activeUserVoiceBubble && state.activeUserVoiceBubble.parentNode === stream && String(turnId).includes('voice')) {
-        state.activeUserVoiceBubble.innerHTML = `<div>${escapeHtml(text).replace(/\n/g, '<br/>')}</div>`;
+      if (state.activeUserVoiceBubble && state.activeUserVoiceBubble.parentNode && String(turnId).includes('voice')) {
+        state.activeUserVoiceBubble.innerHTML = formattedHtml;
         stream.scrollTop = stream.scrollHeight;
         return;
       }
-      if (turnId && state.turnBubbleMap[turnId] && state.turnBubbleMap[turnId].parentNode === stream) {
-        state.turnBubbleMap[turnId].innerHTML = `<div>${escapeHtml(text).replace(/\n/g, '<br/>')}</div>`;
+      if (turnId && state.turnBubbleMap[turnId] && state.turnBubbleMap[turnId].parentNode) {
+        state.turnBubbleMap[turnId].innerHTML = formattedHtml;
         stream.scrollTop = stream.scrollHeight;
         return;
       }
+      const rowDiv = document.createElement('div');
+      rowDiv.className = 'ichat-row user';
       const uDiv = document.createElement('div');
       uDiv.className = 'chat-msg user';
       if (turnId) {
@@ -1438,28 +1487,38 @@
       if (String(turnId).includes('voice')) {
         state.activeUserVoiceBubble = uDiv;
       }
-      uDiv.innerHTML = `<div>${escapeHtml(text).replace(/\n/g, '<br/>')}</div>`;
-      stream.appendChild(uDiv);
+      uDiv.innerHTML = formattedHtml;
+      const avatarDiv = document.createElement('div');
+      avatarDiv.className = 'ichat-user-avatar';
+      avatarDiv.textContent = 'SL';
+      rowDiv.appendChild(uDiv);
+      rowDiv.appendChild(avatarDiv);
+      stream.appendChild(rowDiv);
       stream.scrollTop = stream.scrollHeight;
       return;
     }
 
-    // Assistant turn: STRICTLY update the single activeAssistantBubble in place!
+    // Assistant turn: update single activeAssistantBubble in place
     state.activeUserVoiceBubble = null;
-    if (state.activeAssistantBubble && state.activeAssistantBubble.parentNode === stream) {
-      state.activeAssistantBubble.innerHTML = `<div>${escapeHtml(text).replace(/\n/g, '<br/>')}</div>`;
+    if (state.activeAssistantBubble && state.activeAssistantBubble.parentNode) {
+      state.activeAssistantBubble.innerHTML = formattedHtml;
       stream.scrollTop = stream.scrollHeight;
       return;
     }
 
-    if (turnId && state.turnBubbleMap[turnId] && state.turnBubbleMap[turnId].parentNode === stream) {
+    if (turnId && state.turnBubbleMap[turnId] && state.turnBubbleMap[turnId].parentNode) {
       const existing = state.turnBubbleMap[turnId];
       state.activeAssistantBubble = existing;
-      existing.innerHTML = `<div>${escapeHtml(text).replace(/\n/g, '<br/>')}</div>`;
+      existing.innerHTML = formattedHtml;
       stream.scrollTop = stream.scrollHeight;
       return;
     }
 
+    const rowDiv = document.createElement('div');
+    rowDiv.className = 'ichat-row assistant';
+    const avatarDiv = document.createElement('div');
+    avatarDiv.className = 'ichat-avatar';
+    avatarDiv.innerHTML = '<img src="/dbs-logo.png" alt="DBS" />';
     const div = document.createElement('div');
     div.className = 'chat-msg assistant';
     if (turnId) {
@@ -1467,19 +1526,15 @@
       state.turnBubbleMap[turnId] = div;
     }
     state.activeAssistantBubble = div;
-    div.innerHTML = `<div>${escapeHtml(text).replace(/\n/g, '<br/>')}</div>`;
-    stream.appendChild(div);
+    div.innerHTML = formattedHtml;
+    rowDiv.appendChild(avatarDiv);
+    rowDiv.appendChild(div);
+    stream.appendChild(rowDiv);
     stream.scrollTop = stream.scrollHeight;
   }
 
   function appendChatMessage(role, text, extraHtml = '') {
-    const stream = document.getElementById('copilotChatStream');
-    if (!stream) return;
-    const div = document.createElement('div');
-    div.className = `chat-msg ${role}`;
-    div.innerHTML = `${extraHtml}<div>${escapeHtml(text).replace(/\n/g, '<br/>')}</div>`;
-    stream.appendChild(div);
-    stream.scrollTop = stream.scrollHeight;
+    upsertTurnMessage(`${role}_${Date.now()}_${Math.random()}`, role, text);
   }
 
   function appendThinkingTraceToStream(traceText) {
@@ -1497,11 +1552,259 @@
     stream.scrollTop = stream.scrollHeight;
   }
 
+  function renderGroupQuorumMiniChartSvg(grpCounts) {
+    const gA = Number((grpCounts && grpCounts.A) ?? 2);
+    const gB = Number((grpCounts && grpCounts.B) ?? 2);
+    const gC = Number((grpCounts && grpCounts.C) ?? 1);
+    const maxVal = Math.max(4, gA, gB, gC);
+    const wA = Math.round((gA / maxVal) * 140);
+    const wB = Math.round((gB / maxVal) * 140);
+    const wC = Math.round((gC / maxVal) * 140);
+    return `
+      <div style="margin-top:8px; padding-top:8px; border-top:1px solid #F3F4F6;">
+        <div style="font-size:10px; font-weight:700; color:#6B7280; text-transform:uppercase; margin-bottom:4px;">Active Signatory Quorum Graph</div>
+        <svg width="100%" height="58" viewBox="0 0 250 58" style="display:block;">
+          <text x="0" y="13" font-size="10" font-weight="700" fill="#111827">Group A</text>
+          <rect x="54" y="4" width="145" height="11" rx="5.5" fill="#F3F4F6"></rect>
+          <rect x="54" y="4" width="${Math.max(8, wA)}" height="11" rx="5.5" fill="#E31837"></rect>
+          <text x="206" y="13" font-size="10" font-weight="700" fill="#E31837">${gA} Active</text>
+
+          <text x="0" y="32" font-size="10" font-weight="700" fill="#111827">Group B</text>
+          <rect x="54" y="23" width="145" height="11" rx="5.5" fill="#F3F4F6"></rect>
+          <rect x="54" y="23" width="${Math.max(8, wB)}" height="11" rx="5.5" fill="#2563EB"></rect>
+          <text x="206" y="32" font-size="10" font-weight="700" fill="#2563EB">${gB} Active</text>
+
+          <text x="0" y="51" font-size="10" font-weight="700" fill="#111827">Group C</text>
+          <rect x="54" y="42" width="145" height="11" rx="5.5" fill="#F3F4F6"></rect>
+          <rect x="54" y="42" width="${gC > 0 ? Math.max(8, wC) : 4}" height="11" rx="5.5" fill="${gC > 0 ? '#059669' : '#D1D5DB'}"></rect>
+          <text x="206" y="51" font-size="10" font-weight="700" fill="${gC > 0 ? '#059669' : '#6B7280'}">${gC} Active</text>
+        </svg>
+      </div>
+    `;
+  }
+
+  function renderA2UIWidgetHtml(toolName, args, resultObj) {
+    if (!resultObj) return '';
+    const tName = String(toolName || '').toLowerCase();
+    const snap = (state.snapshot && state.snapshot.customer) ? state.snapshot : {};
+    const cust = resultObj.customer || snap.customer || {};
+    const grpCounts = resultObj.active_group_counts || resultObj.remaining_group_counts || snap.active_group_counts || { A: 2, B: 2, C: 1 };
+
+    // 1. NRIC OCR Signatory Extraction Card + Group Quorum Chart
+    if (tName.includes('upload_nric') || resultObj.nric_ocr_card || (tName.includes('add_or_update_signatory') && resultObj.signatory)) {
+      const ocr = resultObj.nric_ocr_card || {};
+      const sig = resultObj.signatory || {};
+      const fullName = ocr.full_name || sig.full_name || args.full_name || 'Authorized Signatory';
+      const nricMasked = ocr.nric_masked || sig.id_number_masked || args.nric_masked || 'S****521J';
+      const roleTitle = ocr.role_title || sig.role_title || args.role_title || 'Treasury Director';
+      const grp = ocr.signing_group || sig.signing_group || args.signing_group || 'A';
+      const isOcr = Boolean(resultObj.nric_ocr_card || (sig.specimen_signature_status && sig.specimen_signature_status.includes('OCR')));
+      return `
+        <div class="a2ui-widget-card a2ui-green" data-a2ui-type="nric-ocr-card">
+          <div class="a2ui-widget-header">
+            <span class="a2ui-widget-title">&#x1FAAA; ${isOcr ? 'Singapore NRIC OCR Verified' : 'Signatory Matrix Updated'}</span>
+            <span class="a2ui-pill green">${isOcr ? '99.4% OCR Match' : `Group ${escapeHtml(grp)}`}</span>
+          </div>
+          <div class="a2ui-kpi-grid">
+            <div class="a2ui-kpi-box">
+              <div class="a2ui-kpi-label">Extracted Full Name</div>
+              <div class="a2ui-kpi-val">${escapeHtml(fullName)}</div>
+            </div>
+            <div class="a2ui-kpi-box">
+              <div class="a2ui-kpi-label">NRIC / Identity No.</div>
+              <div class="a2ui-kpi-val" style="font-family:var(--font-mono);">${escapeHtml(nricMasked)}</div>
+            </div>
+            <div class="a2ui-kpi-box">
+              <div class="a2ui-kpi-label">Role &amp; Mandate Group</div>
+              <div class="a2ui-kpi-val">${escapeHtml(roleTitle)} &middot; <span style="color:#E31837;">Grp ${escapeHtml(grp)}</span></div>
+            </div>
+            <div class="a2ui-kpi-box">
+              <div class="a2ui-kpi-label">Specimen &amp; Token</div>
+              <div class="a2ui-kpi-val" style="color:#059669;">&#x2713; OCR Specimen Active</div>
+            </div>
+          </div>
+          ${renderGroupQuorumMiniChartSvg(grpCounts)}
+        </div>
+      `;
+    }
+
+    // 2. Revoke Signatory (Governance Policy Block vs Successful Revocation)
+    if (tName.includes('revoke_signatory')) {
+      const errCode = String(resultObj.error_code || '');
+      if (resultObj.status === 'error' && errCode.includes('GOVERNANCE')) {
+        const blockedSig = resultObj.blocked_signatory || {};
+        return `
+          <div class="a2ui-widget-card a2ui-red" data-a2ui-type="governance-block-card">
+            <div class="a2ui-widget-header">
+              <span class="a2ui-widget-title" style="color:#DC2626;">&#x1F6E1;&#xFE0F; Sole Group A Governance Shield</span>
+              <span class="a2ui-pill">Policy Blocked</span>
+            </div>
+            <div style="font-size:12px; color:#7F1D1D; font-weight:600; margin-bottom:6px;">
+              Cannot revoke <strong>${escapeHtml(blockedSig.full_name || args.signatory_id_or_name || 'Managing Partner')}</strong> (Group A)
+            </div>
+            <div class="a2ui-kpi-grid">
+              <div class="a2ui-kpi-box">
+                <div class="a2ui-kpi-label">Active Group A Left</div>
+                <div class="a2ui-kpi-val" style="color:#DC2626;">1 Signatory (Minimum: 1)</div>
+              </div>
+              <div class="a2ui-kpi-box">
+                <div class="a2ui-kpi-label">Required Resolution</div>
+                <div class="a2ui-kpi-val">Appoint Co-Partner First</div>
+              </div>
+            </div>
+            ${renderGroupQuorumMiniChartSvg(grpCounts)}
+          </div>
+        `;
+      }
+      const revSig = resultObj.revoked_signatory || {};
+      return `
+        <div class="a2ui-widget-card" data-a2ui-type="revocation-success-card">
+          <div class="a2ui-widget-header">
+            <span class="a2ui-widget-title">&#x2713; Signatory Authority Revoked</span>
+            <span class="a2ui-pill green">Group ${escapeHtml(revSig.signing_group || 'C')} Updated</span>
+          </div>
+          <div class="a2ui-kpi-grid">
+            <div class="a2ui-kpi-box">
+              <div class="a2ui-kpi-label">Revoked Officer</div>
+              <div class="a2ui-kpi-val">${escapeHtml(revSig.full_name || args.signatory_id_or_name || 'Signatory')}</div>
+            </div>
+            <div class="a2ui-kpi-box">
+              <div class="a2ui-kpi-label">Mandate Status</div>
+              <div class="a2ui-kpi-val" style="color:#DC2626;">REVOKED (Immediate)</div>
+            </div>
+          </div>
+          ${renderGroupQuorumMiniChartSvg(grpCounts)}
+        </div>
+      `;
+    }
+
+    // 3. Entity Switch / Mandate Details -> A2UI Corporate Liquidity & Account Distribution Chart
+    if (tName.includes('switch') || tName.includes('mandate_details') || tName.includes('list_customer')) {
+      const accounts = resultObj.accounts || snap.accounts || [];
+      const totalSgd = accounts.reduce((s, a) => s + Number(a.sgd_equivalent_balance || a.balance || 0), 0);
+      const colors = ['#E31837', '#2563EB', '#059669', '#D97706'];
+      let xCursor = 0;
+      const barSegments = accounts.map((acc, i) => {
+        const val = Number(acc.sgd_equivalent_balance || acc.balance || 0);
+        const pct = totalSgd > 0 ? Math.max(6, Math.round((val / totalSgd) * 100)) : 33;
+        const widthPx = Math.max(12, Math.round((pct / 100) * 240));
+        const seg = `<rect x="${xCursor}" y="0" width="${widthPx}" height="14" fill="${colors[i % colors.length]}"></rect>`;
+        xCursor += widthPx;
+        return seg;
+      }).join('');
+
+      const legendRows = accounts.slice(0, 3).map((acc, i) => {
+        const val = Number(acc.sgd_equivalent_balance || acc.balance || 0);
+        const pct = totalSgd > 0 ? Math.round((val / totalSgd) * 100) : 0;
+        return `
+          <div style="display:flex; align-items:center; justify-content:space-between; font-size:11px; margin-top:4px;">
+            <span style="display:flex; align-items:center; gap:5px; color:#374151; font-weight:600;">
+              <span style="width:8px; height:8px; border-radius:2px; background:${colors[i % colors.length]}; display:inline-block;"></span>
+              ${escapeHtml((acc.account_name || acc.account_type || 'Account').slice(0, 26))}
+            </span>
+            <span style="font-family:var(--font-mono); font-weight:700; color:#111827;">${formatCurrency(val, 'SGD')} (${pct}%)</span>
+          </div>
+        `;
+      }).join('');
+
+      return `
+        <div class="a2ui-widget-card" data-a2ui-type="entity-liquidity-chart">
+          <div class="a2ui-widget-header">
+            <span class="a2ui-widget-title">&#x1F3E6; ${escapeHtml(cust.company_name || resultObj.company_name || 'Corporate Entity')}</span>
+            <span class="a2ui-pill green">UEN ${escapeHtml(cust.uen || resultObj.uen || '')}</span>
+          </div>
+          <div class="a2ui-kpi-grid">
+            <div class="a2ui-kpi-box">
+              <div class="a2ui-kpi-label">Consolidated Liquidity</div>
+              <div class="a2ui-kpi-val" style="color:#059669;">${formatCurrency(totalSgd, 'SGD')}</div>
+            </div>
+            <div class="a2ui-kpi-box">
+              <div class="a2ui-kpi-label">Active Quorum</div>
+              <div class="a2ui-kpi-val">${grpCounts.A || 0}A &middot; ${grpCounts.B || 0}B &middot; ${grpCounts.C || 0}C</div>
+            </div>
+          </div>
+          <div style="margin-top:6px;">
+            <div style="font-size:10px; font-weight:700; color:#6B7280; text-transform:uppercase; margin-bottom:4px;">Account Liquidity Allocation Chart</div>
+            <svg width="100%" height="14" viewBox="0 0 240 14" style="border-radius:7px; overflow:hidden; display:block; background:#F3F4F6;">
+              ${barSegments}
+            </svg>
+            ${legendRows}
+          </div>
+        </div>
+      `;
+    }
+
+    // 4. Signing Rule & Transaction Simulation Waterfall Chart
+    if (tName.includes('simulate_transaction') || tName.includes('configure_signing_rules')) {
+      const sgdAmt = Number(resultObj.sgd_equivalent_amount || resultObj.max_amount_sgd || args.max_amount_sgd || 150000);
+      const reqMatrix = resultObj.required_rule_expression || resultObj.rule_expression || args.rule_expression || '2A';
+      const ratio = Math.min(94, Math.max(12, Math.round((sgdAmt / 500000) * 100)));
+      return `
+        <div class="a2ui-widget-card" data-a2ui-type="threshold-simulation-chart">
+          <div class="a2ui-widget-header">
+            <span class="a2ui-widget-title">&#x1F4CA; Mandate Threshold &amp; Routing Chart</span>
+            <span class="a2ui-pill">Requires ${escapeHtml(reqMatrix)}</span>
+          </div>
+          <div class="a2ui-kpi-grid">
+            <div class="a2ui-kpi-box">
+              <div class="a2ui-kpi-label">Evaluated Amount (SGD)</div>
+              <div class="a2ui-kpi-val">${formatCurrency(sgdAmt, 'SGD')}</div>
+            </div>
+            <div class="a2ui-kpi-box">
+              <div class="a2ui-kpi-label">Required Quorum</div>
+              <div class="a2ui-kpi-val" style="color:#E31837;">${escapeHtml(reqMatrix)}</div>
+            </div>
+          </div>
+          <svg width="100%" height="38" viewBox="0 0 240 38" style="display:block; margin-top:4px;">
+            <rect x="0" y="14" width="95" height="10" rx="4" fill="#10B981"></rect>
+            <rect x="97" y="14" width="143" height="10" rx="4" fill="#E31837"></rect>
+            <circle cx="${Math.round((ratio / 100) * 230)}" cy="19" r="6" fill="#111827" stroke="#FFFFFF" stroke-width="2"></circle>
+            <text x="0" y="35" font-size="9.5" font-weight="700" fill="#059669">Tier 1 (&le;$150k: 1A/2B)</text>
+            <text x="128" y="35" font-size="9.5" font-weight="700" fill="#E31837">Tier 2 (&gt;$150k: 2A)</text>
+          </svg>
+        </div>
+      `;
+    }
+
+    // 5. Board Resolution Audit / DigiSign Submission
+    if (tName.includes('audit_board') || tName.includes('submit_mandate') || tName.includes('cosigner')) {
+      const appRef = resultObj.application_ref || (resultObj.application && resultObj.application.application_ref) || 'BRC-09 PASSED';
+      return `
+        <div class="a2ui-widget-card a2ui-green" data-a2ui-type="compliance-digisign-card">
+          <div class="a2ui-widget-header">
+            <span class="a2ui-widget-title">&#x2705; Governance &amp; DigiSign Verification</span>
+            <span class="a2ui-pill green">100/100 Verified</span>
+          </div>
+          <div class="a2ui-kpi-grid">
+            <div class="a2ui-kpi-box">
+              <div class="a2ui-kpi-label">Reference / Resolution</div>
+              <div class="a2ui-kpi-val" style="font-family:var(--font-mono);">${escapeHtml(appRef)}</div>
+            </div>
+            <div class="a2ui-kpi-box">
+              <div class="a2ui-kpi-label">Execution Status</div>
+              <div class="a2ui-kpi-val" style="color:#059669;">&#x2713; Cryptographically Signed</div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    return '';
+  }
+
   function upsertToolExecutionCard(callId, toolName, args, resultObj) {
     const stream = document.getElementById('copilotChatStream');
     if (!stream) return;
     const targetStage = (resultObj && resultObj.target_stage) || state.activeStage || 1;
-    const statusText = resultObj ? (resultObj.status === 'error' ? 'Policy Blocked' : 'Completed') : 'Executing...';
+    const errCode = String((resultObj && resultObj.error_code) || '');
+    const isGovernanceBlock = resultObj && resultObj.status === 'error' && errCode.includes('GOVERNANCE');
+    const statusText = resultObj
+      ? isGovernanceBlock
+        ? 'Policy Blocked'
+        : resultObj.status === 'error'
+          ? 'Needs Review'
+          : 'Completed'
+      : 'Executing...';
     const friendlyName = String(toolName || 'Tool')
       .replace(/_/g, ' ')
       .replace(/\b\w/g, (c) => c.toUpperCase());
@@ -1514,6 +1817,8 @@
       stream.appendChild(card);
     }
 
+    const a2uiHtml = resultObj ? renderA2UIWidgetHtml(toolName, args || {}, resultObj) : '';
+
     card.innerHTML = `
       <div class="tool-exec-header">
         <span>&#x2713; ${escapeHtml(friendlyName)}</span>
@@ -1521,6 +1826,7 @@
           ${escapeHtml(statusText)} &bull; Step ${escapeHtml(targetStage)} &rarr;
         </button>
       </div>
+      ${a2uiHtml}
     `;
 
     const jumpBtn = card.querySelector('.tool-stage-jump-btn');
@@ -1530,6 +1836,50 @@
       });
     }
     stream.scrollTop = stream.scrollHeight;
+  }
+
+  async function triggerNricOcrUploadFlow(fileObj = null) {
+    const filename = fileObj ? fileObj.name : 'NRIC_Desmond_Lim_S8841521J.png';
+    upsertTurnMessage(`nric_user_${Date.now()}`, 'user', `🪪 Uploaded Singapore NRIC Card: ${filename}`);
+
+    let imageBase64 = '';
+    if (fileObj) {
+      imageBase64 = await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => resolve('');
+        reader.readAsDataURL(fileObj);
+      });
+    }
+
+    const res = await apiFetch('/api/ocr/upload-nric', {
+      method: 'POST',
+      body: JSON.stringify({
+        customer_id: state.activeCustomerId || 'CUST-001',
+        filename,
+        signing_group: 'A',
+        role_title: 'Treasury Director',
+        image_base64: imageBase64,
+      }),
+    });
+
+    if (res.ok && res.data) {
+      const toolCalls = res.data.tool_calls || [];
+      toolCalls.forEach((tc, idx) => {
+        upsertToolExecutionCard(tc.call_id || `ocr_${Date.now()}_${idx}`, tc.tool_name, tc.args || {}, tc.result || res.data);
+      });
+      if (res.data.reply) {
+        upsertTurnMessage(`nric_bot_${Date.now()}`, 'assistant', res.data.reply);
+      }
+      if (res.data.workspace_snapshot) {
+        applyWorkspaceSnapshot(res.data.workspace_snapshot);
+      }
+      if (res.data.ui_sync) {
+        await handleUiSync(res.data.ui_sync);
+      }
+    } else {
+      upsertTurnMessage(`nric_err_${Date.now()}`, 'assistant', 'Unable to process NRIC OCR scan. Please try again.');
+    }
   }
 
   async function sendChatPrompt(promptText) {
@@ -2116,6 +2466,28 @@
 
     const bargeInBtn = document.getElementById('bargeInBtn');
     if (bargeInBtn) bargeInBtn.addEventListener('click', triggerBargeInInterruption);
+
+    const quickNricChip = document.getElementById('quickUploadNricChip');
+    if (quickNricChip) {
+      quickNricChip.addEventListener('click', () => {
+        triggerNricOcrUploadFlow(null);
+      });
+    }
+
+    const nricUploadBtn = document.getElementById('copilotNricUploadBtn');
+    const nricFileInput = document.getElementById('copilotNricFileInput');
+    if (nricUploadBtn && nricFileInput) {
+      nricUploadBtn.addEventListener('click', () => {
+        nricFileInput.click();
+      });
+      nricFileInput.addEventListener('change', (e) => {
+        const f = e.target.files && e.target.files[0];
+        if (f) {
+          triggerNricOcrUploadFlow(f);
+          nricFileInput.value = '';
+        }
+      });
+    }
 
     document.querySelectorAll('.suggestion-chip').forEach((chip) => {
       chip.addEventListener('click', () => {

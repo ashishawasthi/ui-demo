@@ -82,6 +82,200 @@
       padding: 16px;
       border-top: 1px solid #E5E7EB;
     }
+    .dbs-header-logo {
+      width: 30px;
+      height: 30px;
+      object-fit: contain;
+      display: block;
+      flex-shrink: 0;
+    }
+    .joy-header-logo {
+      width: 24px;
+      height: 24px;
+      object-fit: contain;
+      display: block;
+      flex-shrink: 0;
+    }
+    /* iChat / iMessage Bubbles + A2UI Visual Micro-Widgets */
+    .ichat-row {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      margin-bottom: 10px;
+      animation: ichatPop 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes ichatPop {
+      from { opacity: 0; transform: translateY(6px) scale(0.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .ichat-row.user {
+      justify-content: flex-end;
+    }
+    .ichat-row.assistant {
+      justify-content: flex-start;
+    }
+    .ichat-avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: #FFFFFF;
+      border: 1px solid #FECDD3;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      box-shadow: 0 2px 5px rgba(227, 24, 55, 0.12);
+    }
+    .ichat-avatar img {
+      width: 19px;
+      height: 19px;
+      object-fit: contain;
+    }
+    .ichat-user-avatar {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: #1A1D21;
+      color: #FFFFFF;
+      font-size: 10px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .chat-msg.user {
+      background: linear-gradient(135deg, #E31837 0%, #C8102E 100%) !important;
+      color: #FFFFFF !important;
+      border-radius: 18px 18px 4px 18px !important;
+      padding: 10px 14px !important;
+      font-size: 13px !important;
+      line-height: 1.45 !important;
+      max-width: 84% !important;
+      box-shadow: 0 3px 10px rgba(227, 24, 55, 0.22) !important;
+      border: none !important;
+    }
+    .chat-msg.assistant {
+      background: #FFFFFF !important;
+      color: #1A1D21 !important;
+      border: 1px solid #E5E7EB !important;
+      border-radius: 18px 18px 18px 4px !important;
+      padding: 11px 14px !important;
+      font-size: 13px !important;
+      line-height: 1.5 !important;
+      max-width: 88% !important;
+      box-shadow: 0 2px 8px rgba(17, 24, 39, 0.06) !important;
+    }
+    .ichat-sender-tag {
+      font-size: 10px;
+      font-weight: 700;
+      color: #E31837;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    /* A2UI Micro-Surface Cards & SVG Charts */
+    .a2ui-widget-card {
+      background: #FFFFFF;
+      border: 1px solid #E5E7EB;
+      border-left: 3.5px solid #E31837;
+      border-radius: 14px;
+      padding: 12px 14px;
+      margin: 6px 0 10px 36px;
+      box-shadow: 0 4px 14px rgba(17, 24, 39, 0.06);
+      animation: ichatPop 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .a2ui-widget-card.a2ui-green {
+      border-left-color: #059669;
+      background: linear-gradient(180deg, #F0FDF4 0%, #FFFFFF 45%);
+    }
+    .a2ui-widget-card.a2ui-red {
+      border-left-color: #DC2626;
+      background: linear-gradient(180deg, #FEF2F2 0%, #FFFFFF 45%);
+    }
+    .a2ui-widget-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      margin-bottom: 8px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #F3F4F6;
+    }
+    .a2ui-widget-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: #111827;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .a2ui-pill {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: #FFF1F2;
+      color: #E31837;
+      border: 1px solid #FECDD3;
+      cursor: pointer;
+    }
+    .a2ui-pill.green {
+      background: #ECFDF5;
+      color: #059669;
+      border-color: #A7F3D0;
+    }
+    .a2ui-kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .a2ui-kpi-box {
+      background: #F9FAFB;
+      border: 1px solid #E5E7EB;
+      border-radius: 8px;
+      padding: 6px 8px;
+    }
+    .a2ui-kpi-label {
+      font-size: 10px;
+      color: #6B7280;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .a2ui-kpi-val {
+      font-size: 13px;
+      font-weight: 700;
+      color: #111827;
+      margin-top: 1px;
+    }
+    .nric-upload-icon-btn {
+      background: #FFF1F2;
+      border: 1px solid #FECDD3;
+      color: #E31837;
+      border-radius: 999px;
+      padding: 6px 11px;
+      font-size: 11.5px;
+      font-weight: 700;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s ease;
+    }
+    .nric-upload-icon-btn:hover {
+      background: #E31837;
+      color: #FFFFFF;
+    }
+    .chip-nric-highlight {
+      background: #FFF1F2 !important;
+      border-color: #E31837 !important;
+      color: #E31837 !important;
+      font-weight: 700 !important;
+    }
   </style>
 </head>
 <body>
@@ -92,7 +286,7 @@
     <div class="header-top-row">
       <!-- Left: Official DBS Spark Emblem & DBS IDEAL Wordmark -->
       <div class="brand-cluster">
-        <div class="dbs-logo-spark" aria-hidden="true"></div>
+        <img src="/dbs-logo.png" alt="DBS Bank" class="dbs-header-logo" />
         <div class="brand-wordmark">
           <span>DBS <span class="ideal-accent">IDEAL</span></span>
           <span class="divider">|</span>
@@ -601,7 +795,7 @@
     <aside class="copilot-dock" id="geminiCopilotDock" aria-label="DBS Joy Voice and Mandate Concierge">
       <div class="copilot-dock-header">
         <div class="copilot-title">
-          <span class="joy-spark-badge">J</span>
+          <img src="/dbs-logo.png" alt="DBS Joy" class="joy-header-logo" />
           <span>DBS Joy &middot; Mandate Concierge</span>
         </div>
         <span class="badge badge-green">Live Sync</span>
@@ -623,13 +817,16 @@
         </div>
       </div>
 
-      <!-- Guided Prompts -->
+      <!-- Guided Prompts & 1-Click NRIC OCR Upload -->
       <div class="copilot-chips-strip" id="suggestionChipsStrip">
-        <button type="button" class="suggestion-chip" data-prompt="Switch to Meridian Pacific Logistics">
-          Meridian Pacific
+        <button type="button" class="suggestion-chip chip-nric-highlight" id="quickUploadNricChip" title="Upload Singapore NRIC & add signatory via OCR">
+          &#x1FAAA; Upload NRIC (OCR)
         </button>
-        <button type="button" class="suggestion-chip" data-prompt="Add Michael Chang as CFO to Group A">
-          + Appoint CFO Michael Chang
+        <button type="button" class="suggestion-chip" data-prompt="Switch to Veritas Legal & Advisory LLP">
+          Veritas Legal LLP
+        </button>
+        <button type="button" class="suggestion-chip" data-prompt="Revoke Kenneth Yap from Group C">
+          Revoke Kenneth Yap
         </button>
         <button type="button" class="suggestion-chip" data-prompt="Change Tier 1 limit to $150,000 SGD">
           Tier 1 &rarr; $150k
@@ -637,21 +834,23 @@
         <button type="button" class="suggestion-chip" data-prompt="Simulate a $250,000 USD payment">
           Test $250k USD
         </button>
-        <button type="button" class="suggestion-chip" data-prompt="Audit BRC-09 resolution and submit mandate">
-          Audit &amp; Submit
-        </button>
       </div>
 
-      <!-- Conversation Stream -->
+      <!-- Conversation Stream (iChat Bubbles + A2UI Micro-Widgets) -->
       <div class="copilot-chat-stream" id="copilotChatStream">
-        <div class="chat-msg assistant">
-          <strong>Hello! I'm Joy, your Corporate Mandate Concierge.</strong><br />
-          Speak or select an action above to appoint signatories via OCR, configure tiered signing rules, validate payment amounts, or submit your board resolution to DigiSign.
+        <div class="ichat-row assistant">
+          <div class="ichat-avatar"><img src="/dbs-logo.png" alt="DBS" /></div>
+          <div class="chat-msg assistant">
+            <div class="ichat-sender-tag"><span>Joy &middot; DBS Mandate Advisor</span><span>A2UI Live</span></div>
+            <div>Hello! Tap <strong>&#x1FAAA; Upload NRIC (OCR)</strong> to onboard a signatory from their NRIC card, switch corporate entities, or speak to test mandate rules.</div>
+          </div>
         </div>
       </div>
 
       <form class="copilot-input-bar" id="copilotChatForm">
-        <input type="text" id="copilotChatInput" placeholder="Ask Joy to update mandate or test rules..." autocomplete="off" />
+        <input type="file" id="copilotNricFileInput" accept="image/*,.pdf,.svg" style="display:none;" />
+        <button type="button" class="nric-upload-icon-btn" id="copilotNricUploadBtn" title="Upload NRIC Card for Instant OCR Signatory Registration">&#x1FAAA; NRIC</button>
+        <input type="text" id="copilotChatInput" placeholder="Message Joy or upload NRIC..." autocomplete="off" />
         <button type="submit" class="btn btn-primary" id="copilotSendBtn" style="border-radius:999px; padding:8px 16px;">Send</button>
       </form>
     </aside>
@@ -659,7 +858,6 @@
 
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="/static/app.js?v=20260919_v5"></script>
-  <script src="app.js?v=20260919_v5"></script>
+  <script src="/app.js?v=20260919_v6"></script>
 </body>
 </html>
