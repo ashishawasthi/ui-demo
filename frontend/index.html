@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DBS IDEAL Corporate Banking — Change of Account Mandate | Gemini Live 3.8</title>
+  <title>DBS IDEAL Corporate Treasury Portal — Change of Account Mandate | Google Gemini Live 3.8</title>
   <link rel="stylesheet" href="/static/styles.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <!-- ========================================================================
-       1. TOP GLOBAL HEADER & LIVE CORPORATE ENTITY SWITCHER
+       1. TOP GLOBAL HEADER & LIVE CORPORATE ENTITY SWITCHER (Google Light Theme)
        ======================================================================== -->
   <header class="global-header" id="globalHeader">
     <div class="header-top-row">
@@ -17,36 +17,54 @@
         <div class="dbs-logo-spark" aria-hidden="true"></div>
         <div class="brand-title-group">
           <div class="brand-wordmark">
-            <span>DBS IDEAL</span>
-            <span class="ideal-pill">Corporate Mandate Hub</span>
+            <span>Corporate Treasury Portal</span>
+            <span class="ideal-pill">DBS IDEAL &bull; Mandate Governance</span>
           </div>
-          <span class="brand-subtitle">Self-Service Account Maintenance &bull; Change of Account Mandate (eForms &amp; DigiSign)</span>
+          <span class="brand-subtitle">Institutional Account Maintenance &bull; Change of Account Mandate &amp; Digital Execution</span>
         </div>
       </div>
 
       <div class="entity-switcher-cluster">
-        <label class="switcher-label" for="customerSelect">Active Corporate Entity:</label>
+        <label class="switcher-label" for="customerSelect">Client Profile:</label>
         <select id="customerSelect" class="entity-select" aria-label="Select Corporate Customer Profile">
-          <option value="">Loading PostgreSQL Corporate Profiles...</option>
+          <option value="">Loading Corporate Profiles...</option>
         </select>
-        <button id="refreshWorkspaceBtn" class="btn btn-secondary" style="padding: 6px 11px; font-size: 11.5px;" title="Reload live state from PostgreSQL">
-          &#x21bb; Sync DB
+        <button id="refreshWorkspaceBtn" class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px;" title="Refresh live state">
+          &#x21bb; Refresh
         </button>
       </div>
 
       <div class="system-status-cluster">
-        <div class="status-pill pg-live" id="dbConnectionBadge" title="Database Engine Status">
+        <div class="status-pill pg-live" id="dbConnectionBadge" title="CloudSQL / PostgreSQL Connection Status">
           <span class="pulse-dot"></span>
-          <span id="dbStatusText">PostgreSQL Live</span>
+          <span id="dbStatusText">CloudSQL Connected</span>
         </div>
-        <div class="status-pill gemini-live" id="geminiModelBadge" title="Active Gemini Live Extended Thinking Model">
-          <span>&#x2728;</span>
+        <button type="button" class="status-pill gemini-live" id="geminiModelBadge" style="cursor:pointer;" title="Click to view or update Google AI Studio API Key">
+          <span style="color:#1A73E8;">&#x2726;</span>
           <span id="modelNameBadgeText">models/gemini-3.8-live-extended-thinking</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Collapsible AI Studio API Key Configuration Bar -->
+    <div id="apiKeyConfigDrawer" style="display:none; background:#F8FBFF; border-top:1px solid var(--google-blue-border); padding:10px 24px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; max-width:1680px; margin:0 auto;">
+        <div style="font-size:12px; color:var(--ink-secondary);">
+          <strong style="color:var(--google-blue-dark);">Google AI Studio Live API (`v1alpha` BidiGenerateContent):</strong>
+          <code>models/gemini-3.8-live-extended-thinking</code> &bull; <code>thinkingLevel: LOW</code> &bull; <code>behavior: NON_BLOCKING</code>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <input type="password" id="aiStudioApiKeyInput" value=""
+                 placeholder="Paste Google AI Studio API Key"
+                 style="padding:6px 12px; border:1px solid var(--border-default); border-radius:6px; font-family:var(--font-mono); font-size:12px; width:320px; background:#FFFFFF; color:var(--ink-primary);" />
+          <button type="button" class="btn btn-primary" id="saveAiStudioKeyBtn" style="padding:6px 14px; font-size:12px;">
+            Apply AI Studio Key
+          </button>
         </div>
       </div>
     </div>
 
-    <!-- Quick-Pill Entity Bar & Live Telemetry Strip (Populated Dynamically from /api/customers & /mandate) -->
+    <!-- Quick-Pill Entity Bar & Executive Summary Strip -->
     <div class="header-entity-bar">
       <div class="profile-quick-pills" id="profileQuickPills" role="tablist" aria-label="Quick Switch Corporate Profiles">
         <!-- Dynamically populated from GET /api/customers -->
@@ -54,15 +72,15 @@
 
       <div class="entity-telemetry-badges" id="entityTelemetryStrip">
         <div class="telemetry-item">
-          <span class="label">UEN:</span>
+          <span class="label">ACRA UEN:</span>
           <span class="val" id="headerUenVal">&mdash;</span>
         </div>
         <div class="telemetry-item">
-          <span class="label">Archetype:</span>
+          <span class="label">Segment:</span>
           <span class="badge badge-blue" id="headerEntityTypeBadge">&mdash;</span>
         </div>
         <div class="telemetry-item">
-          <span class="label">KYC / IDEAL:</span>
+          <span class="label">Verification:</span>
           <span class="badge badge-green" id="headerKycStatusBadge">&mdash;</span>
         </div>
         <div class="telemetry-item balance-highlight">
@@ -74,47 +92,79 @@
   </header>
 
   <!-- ========================================================================
-       2. SPLIT-SCREEN WORKSPACE (5-Stage Mandate Canvas + Gemini Live Copilot Dock)
+       2. SPLIT-SCREEN WORKSPACE (5-Stage Mandate Workflow + Gemini Live Assistant)
        ======================================================================== -->
   <div class="workspace-split-layout">
     <!-- LEFT/MAIN CANVAS: 5-STAGE CHANGE OF MANDATE WORKFLOW -->
     <main class="main-mandate-canvas" id="mainMandateCanvas">
+
+      <!-- 4-Dimension Corporate Mandate Architecture Strip -->
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(210px, 1fr)); gap:12px;">
+        <div style="background:#FFFFFF; border:1px solid var(--border-default); border-radius:var(--radius-sm); padding:11px 14px; box-shadow:var(--shadow-xs);">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <span style="font-size:11px; font-weight:700; color:var(--ink-secondary); text-transform:uppercase;">1. Entry &amp; Auth</span>
+            <span class="badge badge-green" style="font-size:10px; padding:1px 7px;">Verified</span>
+          </div>
+          <div style="font-size:12.5px; font-weight:600; color:var(--ink-primary);">Corporate Token &amp; ACRA BizProfile</div>
+        </div>
+        <div style="background:#FFFFFF; border:1px solid var(--border-default); border-radius:var(--radius-sm); padding:11px 14px; box-shadow:var(--shadow-xs);">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <span style="font-size:11px; font-weight:700; color:var(--ink-secondary); text-transform:uppercase;">2. Mandate Scope</span>
+            <span class="badge badge-blue" style="font-size:10px; padding:1px 7px;">Multi-Account</span>
+          </div>
+          <div style="font-size:12.5px; font-weight:600; color:var(--ink-primary);">Signatories, Tiers &amp; Account Schedule</div>
+        </div>
+        <div style="background:#FFFFFF; border:1px solid var(--border-default); border-radius:var(--radius-sm); padding:11px 14px; box-shadow:var(--shadow-xs);">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <span style="font-size:11px; font-weight:700; color:var(--ink-secondary); text-transform:uppercase;">3. Governance Path</span>
+            <span class="badge badge-blue" style="font-size:10px; padding:1px 7px;">BRC-09 / Minutes</span>
+          </div>
+          <div style="font-size:12.5px; font-weight:600; color:var(--ink-primary);">Automated Clause &amp; Quorum Check</div>
+        </div>
+        <div style="background:#FFFFFF; border:1px solid var(--border-default); border-radius:var(--radius-sm); padding:11px 14px; box-shadow:var(--shadow-xs);">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <span style="font-size:11px; font-weight:700; color:var(--ink-secondary); text-transform:uppercase;">4. Execution Rails</span>
+            <span class="badge badge-green" style="font-size:10px; padding:1px 7px;">DigiSign Ready</span>
+          </div>
+          <div style="font-size:12.5px; font-weight:600; color:var(--ink-primary);">Digital Token &amp; Mobile OTP Sign-Off</div>
+        </div>
+      </div>
 
       <!-- Interactive 5-Stage Horizontal Stepper -->
       <nav class="stage-stepper-bar" id="stageStepperBar" aria-label="Change of Mandate 5-Stage Progress">
         <button type="button" class="stage-step-btn active" data-stage="1" id="stepperBtn1">
           <span class="step-num-circle">1</span>
           <div class="step-text-wrap">
-            <span class="step-kicker">Stage 1</span>
-            <span class="step-title">Entity &amp; Target Accounts</span>
+            <span class="step-kicker">Step 1</span>
+            <span class="step-title">Entity &amp; Accounts</span>
           </div>
         </button>
         <button type="button" class="stage-step-btn" data-stage="2" id="stepperBtn2">
           <span class="step-num-circle">2</span>
           <div class="step-text-wrap">
-            <span class="step-kicker">Stage 2</span>
-            <span class="step-title">Signatory Matrix &amp; OCR</span>
+            <span class="step-kicker">Step 2</span>
+            <span class="step-title">Authorized Signatories</span>
           </div>
         </button>
         <button type="button" class="stage-step-btn" data-stage="3" id="stepperBtn3">
           <span class="step-num-circle">3</span>
           <div class="step-text-wrap">
-            <span class="step-kicker">Stage 3</span>
+            <span class="step-kicker">Step 3</span>
             <span class="step-title">Signing Rules &amp; Simulator</span>
           </div>
         </button>
         <button type="button" class="stage-step-btn" data-stage="4" id="stepperBtn4">
           <span class="step-num-circle">4</span>
           <div class="step-text-wrap">
-            <span class="step-kicker">Stage 4</span>
-            <span class="step-title">BRC-09 Audit &amp; Diff</span>
+            <span class="step-kicker">Step 4</span>
+            <span class="step-title">Resolution &amp; Mandate Diff</span>
           </div>
         </button>
         <button type="button" class="stage-step-btn" data-stage="5" id="stepperBtn5">
           <span class="step-num-circle">5</span>
           <div class="step-text-wrap">
-            <span class="step-kicker">Stage 5</span>
-            <span class="step-title">DigiSign &amp; Audit Trail</span>
+            <span class="step-kicker">Step 5</span>
+            <span class="step-title">Digital Sign-Off &amp; Log</span>
           </div>
         </button>
       </nav>
@@ -126,10 +176,10 @@
         <div class="section-card" id="stage1EntityCard">
           <div class="card-header-row">
             <div class="card-title-block">
-              <h2>Stage 1 &mdash; Corporate Entity Governance &amp; Target Accounts</h2>
-              <p>Verify ACRA corporate profile details and select which accounts are included in this Change of Account Mandate scope.</p>
+              <h2>Corporate Entity Profile &amp; Account Scope</h2>
+              <p>Review registered legal entity particulars and select the corporate accounts covered by this mandate amendment.</p>
             </div>
-            <span class="badge badge-slate" id="stage1MandateVersionBadge">Mandate v1</span>
+            <span class="badge badge-blue" id="stage1MandateVersionBadge">Mandate v1</span>
           </div>
 
           <!-- Dynamic Corporate Entity Metadata Grid -->
@@ -138,23 +188,23 @@
           </div>
 
           <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
-            <h3 style="font-size:14px; font-weight:800;">Corporate Bank Accounts (<span id="selectedAccountsCountLabel">0</span> in Mandate Scope)</h3>
+            <h3 style="font-size:14px; font-weight:700; color:var(--ink-primary);">Corporate Bank Accounts (<span id="selectedAccountsCountLabel">0</span> Selected)</h3>
             <div style="display:flex; gap:8px;">
-              <button type="button" class="btn btn-secondary" id="selectAllAccountsBtn" style="padding:5px 10px; font-size:11.5px;">Select All</button>
+              <button type="button" class="btn btn-secondary" id="selectAllAccountsBtn" style="padding:5px 12px; font-size:12px;">Select All Accounts</button>
             </div>
           </div>
 
           <!-- Dynamic Account Cards Grid -->
           <div class="accounts-grid" id="accountsGrid">
-            <!-- Populated dynamically from PostgreSQL bank_accounts -->
+            <!-- Populated dynamically from bank_accounts -->
           </div>
 
-          <div style="display:flex; align-items:center; justify-content:space-between; padding-top:12px; border-top:1px solid var(--dbs-border);">
-            <span style="font-size:12px; color:var(--dbs-text-secondary);" id="stage1StatusHint">
-              All changes persist directly to PostgreSQL <code>bank_accounts</code>.
+          <div style="display:flex; align-items:center; justify-content:space-between; padding-top:16px; border-top:1px solid var(--border-subtle);">
+            <span style="font-size:12.5px; color:var(--ink-secondary);" id="stage1StatusHint">
+              Selected accounts will be governed by the updated signing mandate upon board resolution approval.
             </span>
             <button type="button" class="btn btn-primary" id="saveTargetAccountsBtn">
-              Save Target Accounts &amp; Continue to Stage 2 &rarr;
+              Save Account Selection &amp; Continue &rarr;
             </button>
           </div>
         </div>
@@ -164,15 +214,15 @@
            STAGE 2: SIGNATORY MATRIX & DOCUMENT INGESTION
            ==================================================================== -->
       <section class="stage-panel" id="stagePanel2" data-stage-panel="2">
-        <!-- Prominent Red Governance Protection Alert Banner (Triggered on Sole Group A Revocation Attempt) -->
+        <!-- Governance Protection Alert Banner (Triggered on Sole Group A Revocation Attempt) -->
         <div class="governance-alert-banner" id="governanceAlertBanner" role="alert">
           <div class="governance-alert-content">
-            <h4>&#x26A0;&#xFE0F; Corporate Governance Protection Alert (<code id="governanceErrorCode">GOVERNANCE_VIOLATION_SOLE_GROUP_A</code>)</h4>
+            <h4>&#x26A0;&#xFE0F; Corporate Governance Policy Restriction (<code id="governanceErrorCode">GOVERNANCE_VIOLATION_SOLE_GROUP_A</code>)</h4>
             <p id="governanceAlertMessage">
-              Corporate governance requires at least 1 active Group A signatory (Executive Director / Managing Partner) at all times. Revocation of the sole remaining Group A signatory has been blocked.
+              Corporate governance requires at least 1 active Group A signatory (Executive Director / Managing Partner) at all times. Removal of the sole remaining Group A signatory cannot proceed until a replacement Group A director is appointed.
             </p>
           </div>
-          <button type="button" class="btn btn-secondary" id="dismissGovernanceAlertBtn" style="padding:4px 10px; font-size:11.5px;">
+          <button type="button" class="btn btn-secondary" id="dismissGovernanceAlertBtn" style="padding:5px 12px; font-size:12px;">
             Dismiss
           </button>
         </div>
@@ -180,11 +230,11 @@
         <div class="section-card" id="stage2MatrixCard">
           <div class="card-header-row">
             <div class="card-title-block">
-              <h2>Stage 2 &mdash; Authorized Signatory Matrix (Groups A / B / C)</h2>
-              <p>Manage authorized signatories across executive and operational groups. Revoking the sole remaining Group A signatory is protected by database governance constraints.</p>
+              <h2>Authorized Signatory Matrix (Groups A, B &amp; C)</h2>
+              <p>Review current authorized signatories, appoint new officers via identity document extraction, or revoke departing signatories.</p>
             </div>
             <div style="display:flex; gap:8px;">
-              <button type="button" class="btn btn-secondary" id="jumpToStage3From2Btn">Continue to Stage 3 &rarr;</button>
+              <button type="button" class="btn btn-secondary" id="jumpToStage3From2Btn">Next: Signing Rules &rarr;</button>
             </div>
           </div>
 
@@ -193,59 +243,59 @@
             <div class="group-column group-a">
               <div class="group-column-header">
                 <div>
-                  <strong style="font-size:13.5px; color:var(--dbs-red);">Group A &mdash; Executive / Directors</strong>
-                  <div style="font-size:11px; color:var(--dbs-text-muted);">Primary Authorizers &amp; Board Quorum</div>
+                  <strong style="font-size:13.5px; color:var(--google-blue-dark);">Group A &mdash; Executive Directors</strong>
+                  <div style="font-size:11.5px; color:var(--ink-secondary);">Primary Approvers &amp; Board Quorum</div>
                 </div>
-                <span class="badge badge-red" id="groupACountBadge">0 Active</span>
+                <span class="badge badge-blue" id="groupACountBadge">0 Active</span>
               </div>
               <div id="groupAColumn" style="display:flex; flex-direction:column; gap:10px;">
-                <!-- Populated from PostgreSQL signatories -->
+                <!-- Populated dynamically -->
               </div>
             </div>
 
             <div class="group-column group-b">
               <div class="group-column-header">
                 <div>
-                  <strong style="font-size:13.5px; color:var(--dbs-blue);">Group B &mdash; Finance &amp; Treasury</strong>
-                  <div style="font-size:11px; color:var(--dbs-text-muted);">Controllers &amp; Co-Signers</div>
+                  <strong style="font-size:13.5px; color:var(--google-yellow-dark);">Group B &mdash; Finance &amp; Treasury</strong>
+                  <div style="font-size:11.5px; color:var(--ink-secondary);">Controllers &amp; Co-Signers</div>
                 </div>
-                <span class="badge badge-blue" id="groupBCountBadge">0 Active</span>
+                <span class="badge badge-amber" id="groupBCountBadge">0 Active</span>
               </div>
               <div id="groupBColumn" style="display:flex; flex-direction:column; gap:10px;">
-                <!-- Populated from PostgreSQL signatories -->
+                <!-- Populated dynamically -->
               </div>
             </div>
 
             <div class="group-column group-c">
               <div class="group-column-header">
                 <div>
-                  <strong style="font-size:13.5px; color:var(--dbs-green);">Group C &mdash; Operations &amp; Makers</strong>
-                  <div style="font-size:11px; color:var(--dbs-text-muted);">Operational Initiators</div>
+                  <strong style="font-size:13.5px; color:var(--google-green-dark);">Group C &mdash; Operations</strong>
+                  <div style="font-size:11.5px; color:var(--ink-secondary);">Payment Makers &amp; Initiators</div>
                 </div>
                 <span class="badge badge-green" id="groupCCountBadge">0 Active</span>
               </div>
               <div id="groupCColumn" style="display:flex; flex-direction:column; gap:10px;">
-                <!-- Populated from PostgreSQL signatories -->
+                <!-- Populated dynamically -->
               </div>
             </div>
           </div>
 
-          <!-- Add/Update Signatory Form + NRIC / Board Resolution Instant OCR Extraction Dropzone -->
+          <!-- Add/Update Signatory Form + NRIC / Board Resolution Document Extraction -->
           <div class="stage2-ingestion-grid">
             <!-- Left: Manual Add / Update Signatory Form -->
-            <div class="section-card" style="margin-bottom:0; background:#F8FAFC;">
-              <h3 style="font-size:14px; font-weight:800; margin-bottom:10px;">Add or Update Authorized Signatory</h3>
+            <div class="section-card" style="margin-bottom:0; background:var(--surface-canvas);">
+              <h3 style="font-size:14px; font-weight:700; margin-bottom:12px; color:var(--ink-primary);">Appoint or Update Authorized Signatory</h3>
               <form id="addSignatoryForm" class="form-grid-2col">
                 <div class="form-field">
-                  <label for="sigFullNameInput">Full Legal Name (per NRIC/Passport) *</label>
+                  <label for="sigFullNameInput">Full Legal Name (as on NRIC/Passport) *</label>
                   <input type="text" id="sigFullNameInput" placeholder="e.g., Michael Chang" required />
                 </div>
                 <div class="form-field">
-                  <label for="sigRoleTitleInput">Corporate Role / Designation *</label>
+                  <label for="sigRoleTitleInput">Corporate Title / Designation *</label>
                   <input type="text" id="sigRoleTitleInput" placeholder="e.g., Chief Financial Officer" required />
                 </div>
                 <div class="form-field">
-                  <label for="sigGroupSelect">Signing Group *</label>
+                  <label for="sigGroupSelect">Authorization Group *</label>
                   <select id="sigGroupSelect">
                     <option value="A">Group A (Executive Director / C-Suite)</option>
                     <option value="B">Group B (Finance / Treasury Controller)</option>
@@ -253,22 +303,22 @@
                   </select>
                 </div>
                 <div class="form-field">
-                  <label for="sigNricInput">Masked NRIC / Passport No. *</label>
+                  <label for="sigNricInput">Identity Document No. (NRIC / Passport) *</label>
                   <input type="text" id="sigNricInput" placeholder="e.g., S8944102C" required />
                 </div>
                 <div class="form-field">
-                  <label for="sigAuthMethodSelect">Authentication Method</label>
+                  <label for="sigAuthMethodSelect">Signing Credential</label>
                   <select id="sigAuthMethodSelect">
-                    <option value="IDEAL Token">IDEAL Digital Token</option>
-                    <option value="DigiSign Mobile">DigiSign Mobile (+65 SMS)</option>
+                    <option value="IDEAL Token">Hardware / Digital Security Token</option>
+                    <option value="DigiSign Mobile">DigiSign Mobile OTP (+65 SMS)</option>
                   </select>
                 </div>
                 <div class="form-field">
-                  <label for="sigEmailInput">Corporate Email</label>
+                  <label for="sigEmailInput">Official Corporate Email</label>
                   <input type="email" id="sigEmailInput" placeholder="e.g., m.chang@company.sg" />
                 </div>
                 <div class="form-field">
-                  <label for="sigPhoneInput">Masked Mobile Number</label>
+                  <label for="sigPhoneInput">Mobile Number</label>
                   <input type="text" id="sigPhoneInput" placeholder="e.g., +65 9***8821" />
                 </div>
                 <div class="form-field">
@@ -277,33 +327,33 @@
                 </div>
                 <div style="grid-column: 1 / -1; display:flex; justify-content:flex-end; gap:8px; margin-top:6px;">
                   <button type="submit" class="btn btn-primary" id="submitSignatoryFormBtn">
-                    + Persist Signatory to PostgreSQL
+                    + Add Authorized Signatory
                   </button>
                 </div>
               </form>
             </div>
 
-            <!-- Right: Interactive NRIC / Board Resolution Document Dropzone & Instant OCR Extraction -->
+            <!-- Right: Identity & ACRA Document Extraction Dropzone -->
             <div class="ocr-dropzone-card" id="ocrDropzoneCard">
-              <div style="font-size:26px; margin-bottom:6px;">&#x1F4C4;</div>
-              <h3 style="font-size:14px; font-weight:800; color:var(--dbs-text-primary);">
-                NRIC / Board Resolution Document Dropzone &amp; Instant OCR Extraction
+              <div style="font-size:28px; margin-bottom:6px; color:var(--google-blue);">&#x1F4C4;</div>
+              <h3 style="font-size:14.5px; font-weight:700; color:var(--ink-primary);">
+                Identity &amp; ACRA BizProfile Document Verification
               </h3>
-              <p style="font-size:12px; color:var(--dbs-text-secondary); margin: 6px 0 12px;">
-                Upload an NRIC/Passport copy or ACRA BizFile appointment extract to auto-populate and persist verified OCR specimen metadata directly via <code>POST /api/customers/{id}/signatories</code>.
+              <p style="font-size:12.5px; color:var(--ink-secondary); margin: 6px 0 14px;">
+                Upload an NRIC/Passport schedule or ACRA officer appointment extract to pre-fill officer particulars and verify specimen signature records.
               </p>
 
               <div style="display:flex; flex-direction:column; gap:10px; align-items:center;">
                 <input type="file" id="ocrFileInput" accept=".pdf,.png,.jpg,.jpeg,.txt" style="font-size:12px;" />
-                <div id="ocrExtractionPreviewBox" style="width:100%; text-align:left; background:#FFFFFF; border:1px solid var(--dbs-blue-border); border-radius:var(--radius-sm); padding:10px; font-size:11.5px; display:none;">
+                <div id="ocrExtractionPreviewBox" style="width:100%; text-align:left; background:#FFFFFF; border:1px solid var(--google-blue-border); border-radius:var(--radius-sm); padding:10px 12px; font-size:12px; display:none;">
                   <!-- Populated when OCR extraction runs -->
                 </div>
                 <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:center;">
                   <button type="button" class="btn btn-secondary" id="previewOcrBtn">
-                    1. Extract &amp; Preview Document Fields
+                    Preview Extracted Fields
                   </button>
                   <button type="button" class="btn btn-primary" id="confirmOcrPersistBtn">
-                    2. Instant OCR Extract &amp; Save to DB
+                    Verify &amp; Add from Document
                   </button>
                 </div>
               </div>
@@ -319,39 +369,39 @@
         <div class="section-card" id="stage3RulesCard">
           <div class="card-header-row">
             <div class="card-title-block">
-              <h2>Stage 3 &mdash; Tiered Signing Rule Builder &amp; Live Transaction Simulator</h2>
-              <p>Configure multi-tier SGD threshold limits and Group A/B/C authorization combinations in PostgreSQL, then simulate multi-currency payments.</p>
+              <h2>Tiered Signing Policy &amp; Authorization Simulator</h2>
+              <p>Configure transaction limit tiers and required Group A/B/C authorization combinations, then validate sample payments against active signatories.</p>
             </div>
-            <button type="button" class="btn btn-secondary" id="jumpToStage4From3Btn">Continue to Stage 4 &rarr;</button>
+            <button type="button" class="btn btn-secondary" id="jumpToStage4From3Btn">Next: Resolution &amp; Diff &rarr;</button>
           </div>
 
-          <!-- Live PostgreSQL Signing Rules Table -->
+          <!-- Signing Rules Table -->
           <table class="rules-table" id="signingRulesTable">
             <thead>
               <tr>
                 <th>Tier</th>
-                <th>Tier Label</th>
-                <th>Min Threshold (SGD)</th>
-                <th>Max Threshold (SGD)</th>
-                <th>Required Group Combination</th>
-                <th>Human-Readable Mandate Rule</th>
+                <th>Policy Band</th>
+                <th>Minimum Limit (SGD)</th>
+                <th>Maximum Limit (SGD)</th>
+                <th>Required Combination</th>
+                <th>Authorization Policy Description</th>
               </tr>
             </thead>
             <tbody id="signingRulesTableBody">
-              <!-- Populated dynamically from PostgreSQL signing_rules -->
+              <!-- Populated dynamically -->
             </tbody>
           </table>
 
           <!-- Interactive Rule Editor Form -->
-          <div class="section-card" style="background:#F8FAFC; margin-bottom:20px;">
-            <h3 style="font-size:14px; font-weight:800; margin-bottom:10px;">Configure Tiered Signing Rule (Persists to PostgreSQL &amp; Cascades Adjacent Tiers)</h3>
+          <div class="section-card" style="background:var(--surface-canvas); margin-bottom:20px;">
+            <h3 style="font-size:14px; font-weight:700; margin-bottom:10px; color:var(--ink-primary);">Modify Tiered Signing Thresholds</h3>
             <form id="configureRuleForm" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap:12px; align-items:end;">
               <div class="form-field">
-                <label for="ruleTierOrderSelect">Target Tier</label>
+                <label for="ruleTierOrderSelect">Policy Tier</label>
                 <select id="ruleTierOrderSelect">
-                  <option value="1">Tier 1 (Operational)</option>
-                  <option value="2">Tier 2 (Mid/High Value)</option>
-                  <option value="3">Tier 3 (Board / Unlimited)</option>
+                  <option value="1">Tier 1 (Operational Band)</option>
+                  <option value="2">Tier 2 (Mid/High Value Band)</option>
+                  <option value="3">Tier 3 (Board / Above Threshold)</option>
                 </select>
               </div>
               <div class="form-field">
@@ -359,8 +409,8 @@
                 <input type="number" id="ruleMinAmountInput" value="0" min="0" step="1000" />
               </div>
               <div class="form-field">
-                <label for="ruleMaxAmountInput">Max Threshold (SGD)</label>
-                <input type="number" id="ruleMaxAmountInput" value="150000" min="1000" step="5000" placeholder="Leave blank for Unlimited" />
+                <label for="ruleMaxAmountInput">Max Limit (SGD)</label>
+                <input type="number" id="ruleMaxAmountInput" value="150000" min="1000" step="5000" placeholder="Blank for Unlimited" />
               </div>
               <div class="form-field">
                 <label for="ruleExpressionSelect">Required Group Combination</label>
@@ -375,33 +425,33 @@
               </div>
               <div>
                 <button type="submit" class="btn btn-primary" id="saveSigningRuleBtn" style="width:100%;">
-                  Update Signing Rule in DB
+                  Save Tier Rule
                 </button>
               </div>
             </form>
           </div>
 
-          <!-- Interactive Transaction Authorization Simulator -->
+          <!-- Light-Themed Policy Authorization Simulator -->
           <div class="simulator-panel" id="transactionSimulatorPanel">
             <div>
-              <span class="badge badge-red" style="margin-bottom:8px;">LIVE POSTGRESQL AUTHORIZATION ENGINE</span>
-              <h3 style="font-size:17px; font-weight:800; color:#FFFFFF;">Interactive Transaction Authorization Simulator</h3>
-              <p style="font-size:12.5px; color:#CBD5E1; margin-top:4px;">
-                Test any transaction amount and currency against your active database signing rules and eligible Group A/B/C signatories.
+              <span class="badge badge-blue" style="margin-bottom:8px;">Policy Sandbox Validator</span>
+              <h3 style="font-size:16px; font-weight:700; color:var(--ink-primary);">Transaction Authorization Simulator</h3>
+              <p style="font-size:12.5px; color:var(--ink-secondary); margin-top:4px;">
+                Test any transaction amount and currency to verify which active signatory combinations can release the payment without deadlock.
               </p>
 
               <div style="margin-top:16px;">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                  <label for="simAmountSlider" style="font-size:12px; color:#94A3B8; font-weight:600;">Transaction Amount Slider (10,000 &ndash; 2,000,000):</label>
-                  <span style="font-family:var(--font-mono); font-size:18px; font-weight:800; color:#38BDF8;" id="simSliderDisplayLabel">SGD 150,000</span>
+                  <label for="simAmountSlider" style="font-size:12px; color:var(--ink-secondary); font-weight:600;">Test Payment Amount:</label>
+                  <span style="font-family:var(--font-mono); font-size:17px; font-weight:700; color:var(--google-blue-dark);" id="simSliderDisplayLabel">SGD 150,000.00</span>
                 </div>
                 <input type="range" id="simAmountSlider" class="sim-slider-input" min="10000" max="2000000" step="5000" value="150000" />
 
-                <div style="display:grid; grid-template-columns: 1fr 130px auto; gap:10px; margin-top:10px;">
+                <div style="display:grid; grid-template-columns: 1fr 140px auto; gap:10px; margin-top:10px;">
                   <input type="number" id="simAmountNumericInput" value="150000" min="100" step="1000"
-                         style="background:#1E293B; color:#FFFFFF; border:1px solid #475569; padding:8px 12px; border-radius:var(--radius-sm); font-family:var(--font-mono);" />
+                         style="background:#FFFFFF; color:var(--ink-primary); border:1px solid var(--border-default); padding:8px 12px; border-radius:var(--radius-sm); font-family:var(--font-mono); font-weight:600;" />
                   <select id="simCurrencySelect"
-                          style="background:#1E293B; color:#FFFFFF; border:1px solid #475569; padding:8px 10px; border-radius:var(--radius-sm); font-weight:700;">
+                          style="background:#FFFFFF; color:var(--ink-primary); border:1px solid var(--border-default); padding:8px 10px; border-radius:var(--radius-sm); font-weight:600;">
                     <option value="SGD">SGD (Base)</option>
                     <option value="USD">USD (FX 1.35)</option>
                     <option value="EUR">EUR (FX 1.46)</option>
@@ -409,7 +459,7 @@
                     <option value="JPY">JPY (FX 0.0091)</option>
                   </select>
                   <button type="button" class="btn btn-primary" id="runSimulationBtn">
-                    Simulate Auth
+                    Verify Policy
                   </button>
                 </div>
               </div>
@@ -417,7 +467,7 @@
 
             <!-- Right: Dynamic Simulation Output -->
             <div class="sim-result-card" id="simulatorResultBox">
-              <div style="color:#94A3B8; font-size:12px;">Click &ldquo;Simulate Auth&rdquo; or move the slider to evaluate against live database rules...</div>
+              <div style="color:var(--ink-secondary); font-size:12.5px;">Move the amount slider or click &ldquo;Verify Policy&rdquo; to inspect eligible signatory combinations...</div>
             </div>
           </div>
         </div>
@@ -430,118 +480,118 @@
         <div class="section-card" id="stage4AuditDiffCard">
           <div class="card-header-row">
             <div class="card-title-block">
-              <h2>Stage 4 &mdash; Side-by-Side Mandate Diff &amp; Board Resolution Pre-Flight Audit</h2>
-              <p>Review the live Current vs. Proposed Mandate delta and run compliance verification on Standard DBS BRC-09 or Custom Board Minutes.</p>
+              <h2>Mandate Summary Comparison &amp; Board Resolution Verification</h2>
+              <p>Compare the existing mandate against your proposed changes and verify Board of Directors resolution clauses prior to execution.</p>
             </div>
-            <button type="button" class="btn btn-primary" id="jumpToStage5From4Btn">Proceed to Stage 5 Execution &rarr;</button>
+            <button type="button" class="btn btn-primary" id="jumpToStage5From4Btn">Proceed to Digital Sign-Off &rarr;</button>
           </div>
 
           <!-- Side-by-Side Current vs Proposed Mandate Diff -->
-          <h3 style="font-size:14px; font-weight:800; margin-bottom:10px;">Side-by-Side Current vs. Proposed Mandate Comparison</h3>
+          <h3 style="font-size:14px; font-weight:700; margin-bottom:10px; color:var(--ink-primary);">Current vs. Proposed Mandate Summary</h3>
           <div class="mandate-diff-split">
             <div class="diff-col current" id="mandateDiffCurrentCol">
-              <!-- Populated dynamically from mandate snapshot -->
+              <!-- Populated dynamically -->
             </div>
             <div class="diff-col proposed" id="mandateDiffProposedCol">
-              <!-- Populated dynamically from mandate_diff & live snapshot -->
+              <!-- Populated dynamically -->
             </div>
           </div>
 
           <!-- Board Resolution Auditor Controls -->
-          <div class="section-card" style="background:#F8FAFC; margin-bottom:0;">
+          <div class="section-card" style="background:var(--surface-canvas); margin-bottom:0;">
             <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:12px;">
               <div>
-                <h3 style="font-size:14px; font-weight:800;">Board Resolution Pre-Flight Compliance Auditor</h3>
-                <p style="font-size:12px; color:var(--dbs-text-secondary);">Verifies Quorum, Target Account Schedule, Signing Matrix Alignment, and DBS IDEAL Electronic Banking Clause.</p>
+                <h3 style="font-size:14px; font-weight:700; color:var(--ink-primary);">Board Resolution Pre-Flight Verification</h3>
+                <p style="font-size:12.5px; color:var(--ink-secondary);">Checks Director Quorum, Account Schedule Alignment, Signatory Group Matrix, and Electronic Banking Clauses.</p>
               </div>
               <div style="display:flex; gap:8px;">
-                <button type="button" class="btn btn-secondary" id="selectBrc09FormatBtn">Standard BRC-09 Format</button>
+                <button type="button" class="btn btn-secondary" id="selectBrc09FormatBtn">Standard BRC-09 Template</button>
                 <button type="button" class="btn btn-secondary" id="selectCustomMinutesBtn">Custom Board Minutes</button>
               </div>
             </div>
 
             <div class="form-grid-2col" style="margin-bottom:12px;">
               <div class="form-field">
-                <label for="auditResolutionTypeSelect">Resolution Format Type</label>
+                <label for="auditResolutionTypeSelect">Resolution Document Format</label>
                 <select id="auditResolutionTypeSelect">
-                  <option value="BRC-09">Standard DBS BRC-09 Certified Extract</option>
+                  <option value="BRC-09">Standard BRC-09 Certified Extract</option>
                   <option value="CUSTOM">Custom Board of Directors Minutes</option>
                 </select>
               </div>
               <div class="form-field">
-                <label for="auditResolutionRefInput">Board Resolution Reference No.</label>
+                <label for="auditResolutionRefInput">Board Resolution Reference</label>
                 <input type="text" id="auditResolutionRefInput" placeholder="e.g., BRC-09-2026-0918" />
               </div>
               <div class="form-field" style="grid-column: 1 / -1;">
-                <label for="auditClauseTextInput">Resolution Clause Text / Extract (Editable for Compliance Audit)</label>
-                <textarea id="auditClauseTextInput" rows="4" placeholder="RESOLVED THAT a quorum of Directors being present, the corporate bank accounts and DBS IDEAL electronic banking &amp; DigiSign mobile token mandate be amended per the attached Group A/B/C schedule..."></textarea>
+                <label for="auditClauseTextInput">Resolution Extract / Certified Wording</label>
+                <textarea id="auditClauseTextInput" rows="3" placeholder="RESOLVED THAT a quorum of Directors being present, the corporate bank accounts and electronic banking mandate be amended per the attached Group A/B/C schedule..."></textarea>
               </div>
             </div>
 
             <div style="display:flex; justify-content:space-between; align-items:center;">
-              <span class="badge badge-green" id="auditOverallScoreBadge">Compliance Score: Pending</span>
+              <span class="badge badge-green" id="auditOverallScoreBadge">Verification Status: Ready</span>
               <button type="button" class="btn btn-primary" id="runBoardResolutionAuditBtn">
-                &#x2714; Run Board Resolution Pre-Flight Audit
+                &#x2714; Verify Board Resolution
               </button>
             </div>
 
             <!-- 4-Point Clause Verification Checklist -->
             <div class="clause-checklist-grid" id="clauseChecklistGrid">
-              <!-- Populated dynamically from board_resolutions / audit endpoint -->
+              <!-- Populated dynamically -->
             </div>
           </div>
         </div>
       </section>
 
       <!-- ====================================================================
-           STAGE 5: DIGITAL EXECUTION, DIGISIGN TRACKER & IMMUTABLE AUDIT TRAIL
+           STAGE 5: DIGITAL EXECUTION, DIGISIGN TRACKER & AUDIT LOG
            ==================================================================== -->
       <section class="stage-panel" id="stagePanel5" data-stage-panel="5">
         <div class="section-card" id="stage5ExecutionCard">
           <div class="card-header-row">
             <div class="card-title-block">
-              <h2>Stage 5 &mdash; Digital Execution (Multi-Party DigiSign) &amp; Immutable Audit Trail</h2>
-              <p>Submit the audited Change of Account Mandate to generate an official <code>COM-2026-...</code> reference and execute co-signer IDEAL Token / DigiSign authorization.</p>
+              <h2>Multi-Party Digital Execution &amp; Compliance Audit Log</h2>
+              <p>Submit the mandate change request for director authorization via Hardware/Digital Token or DigiSign Mobile OTP.</p>
             </div>
-            <span class="badge badge-blue" id="stage5AppRefBadge">No Active Submission</span>
+            <span class="badge badge-blue" id="stage5AppRefBadge">Ready for Submission</span>
           </div>
 
           <!-- Submit Change of Mandate Bar -->
-          <div class="section-card" style="background:#F8FAFC;">
+          <div class="section-card" style="background:var(--surface-canvas);">
             <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:14px;">
               <div>
-                <h3 style="font-size:14px; font-weight:800;">1. Formal Change of Mandate Submission</h3>
-                <p style="font-size:12px; color:var(--dbs-text-secondary);">
-                  Generates an official <code>COM-2026-XXXXX</code> application record in PostgreSQL <code>mandate_change_applications</code> and initializes multi-director DigiSign tracking.
+                <h3 style="font-size:14px; font-weight:700; color:var(--ink-primary);">1. Submit Change of Mandate Request</h3>
+                <p style="font-size:12.5px; color:var(--ink-secondary);">
+                  Registers an official <code>COM-2026-XXXXX</code> mandate application and dispatches signing requests to required Group A directors.
                 </p>
               </div>
               <div style="display:flex; gap:10px; align-items:center;">
-                <input type="text" id="submitterNameInput" placeholder="Submitted by (e.g. Authorized Director)"
-                       style="padding:8px 11px; border:1px solid var(--dbs-border-strong); border-radius:var(--radius-sm); font-size:12.5px; min-width:230px;" />
+                <input type="text" id="submitterNameInput" placeholder="Initiating Officer / Director Name"
+                       style="padding:8px 12px; border:1px solid var(--border-default); border-radius:var(--radius-sm); font-size:13px; min-width:230px; background:#FFFFFF;" />
                 <button type="button" class="btn btn-primary" id="submitMandateApplicationBtn">
-                  &#x1F680; Submit Change of Mandate Application
+                  Submit Mandate Application
                 </button>
               </div>
             </div>
           </div>
 
           <!-- Multi-Party DigiSign Co-Signer Live Tracker -->
-          <div style="margin-bottom:20px;">
-            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
-              <h3 style="font-size:14px; font-weight:800;">2. Multi-Party DigiSign &amp; IDEAL Token Co-Signer Tracker</h3>
-              <button type="button" class="btn btn-success" id="executeCosignAllBtn" style="padding:6px 12px; font-size:12px;">
-                &#x1F510; Sign with IDEAL Token / Simulate Co-Signer DigiSign
+          <div style="margin-bottom:22px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+              <h3 style="font-size:14px; font-weight:700; color:var(--ink-primary);">2. Director &amp; Co-Signer Authorization Status</h3>
+              <button type="button" class="btn btn-success" id="executeCosignAllBtn" style="padding:7px 14px; font-size:12.5px;">
+                &#x2714; Complete Co-Signer Authorization
               </button>
             </div>
             <div class="digisign-tracker-list" id="digisignTrackerList">
-              <!-- Populated dynamically from mandate_change_applications.digisign_signers -->
+              <!-- Populated dynamically -->
             </div>
           </div>
 
-          <!-- Live PostgreSQL mandate_audit_logs Chronological Table -->
+          <!-- Compliance & Activity Audit Log Table -->
           <div>
-            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
-              <h3 style="font-size:14px; font-weight:800;">3. Immutable PostgreSQL Audit Trail (<code>mandate_audit_logs</code>)</h3>
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+              <h3 style="font-size:14px; font-weight:700; color:var(--ink-primary);">3. Compliance &amp; Activity Audit Log</h3>
               <span class="badge badge-slate" id="auditLogCountBadge">0 Events</span>
             </div>
             <div class="audit-log-table-wrap">
@@ -549,14 +599,14 @@
                 <thead>
                   <tr>
                     <th>Timestamp (UTC)</th>
-                    <th>Event Type</th>
-                    <th>Actor &amp; Channel</th>
-                    <th>Target Entity</th>
-                    <th>State Mutation / Compliance Summary</th>
+                    <th>Action</th>
+                    <th>Authorized Actor</th>
+                    <th>Reference</th>
+                    <th>Audit Summary</th>
                   </tr>
                 </thead>
                 <tbody id="auditLogsTableBody">
-                  <!-- Populated dynamically from PostgreSQL mandate_audit_logs -->
+                  <!-- Populated dynamically -->
                 </tbody>
               </table>
             </div>
@@ -566,77 +616,78 @@
     </main>
 
     <!-- ======================================================================
-         RIGHT DOCK: SYNCHRONIZED GEMINI LIVE (3.8 EXTENDED THINKING) COPILOT
+         RIGHT PANEL: GOOGLE GEMINI LIVE 3.8 MULTIMODAL ASSISTANT (Light Theme)
          ====================================================================== -->
-    <aside class="copilot-dock" id="geminiCopilotDock" aria-label="Gemini Live 3.8 Voice and Chat Copilot Dock">
-      <!-- Copilot Header -->
+    <aside class="copilot-dock" id="geminiCopilotDock" aria-label="Gemini Live 3.8 Voice and Chat Assistant">
+      <!-- Assistant Header -->
       <div class="copilot-dock-header">
         <div class="copilot-title-row">
           <div class="copilot-title">
-            <span>&#x1F399;&#xFE0F; Gemini Live Copilot</span>
+            <span style="color:var(--google-blue); font-size:16px;">&#x2726;</span>
+            <span>Gemini Live Assistant</span>
           </div>
-          <span class="badge badge-green" id="wsConnectionBadge">WS Connecting...</span>
+          <span class="badge badge-green" id="wsConnectionBadge">Ready</span>
         </div>
-        <div style="display:flex; align-items:center; justify-content:space-between; font-size:11px; color:#94A3B8;">
-          <code style="color:#C4B5FD;">models/gemini-3.8-live-extended-thinking</code>
-          <span>Real-Time DB + UI Sync</span>
+        <div style="display:flex; align-items:center; justify-content:space-between; font-size:11.5px; color:var(--ink-secondary);">
+          <span><code>gemini-3.8-live-extended-thinking</code></span>
+          <span>Voice &amp; Live UI Sync</span>
         </div>
       </div>
 
-      <!-- Interactive Voice Orb & HTML5 Canvas Audio Waveform Visualizer -->
+      <!-- Light-Mode Voice Studio & Google 4-Color Waveform -->
       <div class="voice-studio-deck">
         <div class="orb-waveform-row">
-          <button type="button" class="voice-orb-btn" id="voiceMicToggleBtn" title="Toggle 16kHz PCM Bidirectional Voice Streaming">
-            <span id="voiceOrbIcon" style="font-size:20px;">&#x1F3A4;</span>
+          <button type="button" class="voice-orb-btn" id="voiceMicToggleBtn" title="Start or Stop Gemini Live Voice Conversation">
+            <span id="voiceOrbIcon" style="font-size:18px;">&#x1F3A4;</span>
           </button>
           <div class="waveform-canvas-wrap">
-            <canvas id="voiceWaveformCanvas" width="280" height="36"></canvas>
+            <canvas id="voiceWaveformCanvas" width="280" height="30"></canvas>
             <div class="voice-controls-subrow">
-              <span id="voiceStateLabel">Voice Standby (16kHz In / 24kHz Out)</span>
-              <button type="button" class="barge-in-btn" id="bargeInBtn" title="Interrupt Gemini Live Audio Playback">
-                &#x23F9; Barge-In / Stop Speaking
+              <span id="voiceStateLabel">Click mic for live voice</span>
+              <button type="button" class="barge-in-btn" id="bargeInBtn" title="Stop audio playback">
+                Stop Audio
               </button>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- Quick-Action Voice/Chat Suggestion Chips -->
+      <!-- Guided Action Chips -->
       <div class="copilot-chips-strip" id="suggestionChipsStrip">
         <button type="button" class="suggestion-chip" data-prompt="Switch to Meridian Pacific Logistics">
           Switch to Meridian Pacific
         </button>
         <button type="button" class="suggestion-chip" data-prompt="Add Michael Chang as CFO to Group A">
-          + Add CFO Michael Chang (Group A)
+          + Appoint CFO Michael Chang
         </button>
         <button type="button" class="suggestion-chip" data-prompt="Change Tier 1 limit to $150,000 SGD">
-          Set Tier 1 Limit to $150k SGD
+          Set Tier 1 Limit to $150k
         </button>
         <button type="button" class="suggestion-chip" data-prompt="Simulate a $250,000 USD payment">
-          Simulate $250k USD Payment
+          Test $250k USD Payment
         </button>
         <button type="button" class="suggestion-chip" data-prompt="Audit BRC-09 resolution and submit mandate">
-          Audit BRC-09 &amp; Submit Mandate
+          Verify BRC-09 &amp; Submit
         </button>
       </div>
 
-      <!-- Synchronized Chat Stream (User Turns, Extended Thinking Traces, Live Tool Execution Cards, Assistant Replies) -->
+      <!-- Synchronized Conversation Stream -->
       <div class="copilot-chat-stream" id="copilotChatStream">
         <div class="chat-msg assistant">
-          <strong>DBS IDEAL Gemini Live Copilot Ready.</strong><br />
-          Ask me via voice or text to switch corporate customer profiles, add or revoke Group A/B/C signatories, update tiered signing limits, simulate multi-currency transactions, or audit and submit your Board Resolution. Every tool execution updates PostgreSQL and navigates the 5-stage workspace automatically.
+          <strong>Welcome to the Corporate Mandate Assistant.</strong><br />
+          You can speak via microphone or type below to switch corporate profiles, appoint or revoke signatories, configure signing tiers, test multi-currency transactions, or verify and submit board resolutions.
         </div>
       </div>
 
-      <!-- Chat Input Form -->
+      <!-- Chat Input Bar -->
       <form class="copilot-input-bar" id="copilotChatForm">
-        <input type="text" id="copilotChatInput" placeholder="Ask Gemini Live to modify signatories, rules, or simulate..." autocomplete="off" />
-        <button type="submit" class="btn btn-primary" id="copilotSendBtn">Send</button>
+        <input type="text" id="copilotChatInput" placeholder="Ask to update signatories, rules, or test a payment..." autocomplete="off" />
+        <button type="submit" class="btn btn-primary" id="copilotSendBtn" style="border-radius:999px; padding:8px 16px;">Send</button>
       </form>
     </aside>
   </div>
 
-  <!-- Floating Toast Notifications -->
+  <!-- Toast Notifications -->
   <div class="toast-container" id="toastContainer"></div>
 
   <script src="/static/app.js"></script>

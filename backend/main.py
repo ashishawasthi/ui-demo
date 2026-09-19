@@ -23,9 +23,11 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.db import get_connection, get_db_health, init_db
 from backend.gemini_live import (
+    get_genai_clients,
     get_model_status,
     handle_live_websocket_session,
     run_agent_chat_turn,
+    set_runtime_api_key,
 )
 from backend.tools import (
     SwitchActiveCustomerProfile,
@@ -110,7 +112,7 @@ app.add_middleware(
 
 
 # ============================================================================
-# Health & Diagnostics
+# Health, AI Studio Key & Live Config
 # ============================================================================
 @app.get("/api/health")
 async def api_health() -> dict[str, Any]:
@@ -121,6 +123,28 @@ async def api_health() -> dict[str, Any]:
         "database": db_health,
         "gemini_live": gemini_status,
     }
+
+
+@app.get("/api/config/live")
+async def api_get_live_config() -> dict[str, Any]:
+    clients = get_genai_clients()
+    return {
+        "status": "ok",
+        "api_key": clients.get("api_key"),
+        "model": "models/gemini-3.8-live-extended-thinking",
+        "ws_endpoint": "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent",
+        "thinking_config": {"thinkingLevel": "LOW"},
+        "tool_behavior": "NON_BLOCKING",
+    }
+
+
+@app.post("/api/config/api-key")
+async def api_update_api_key(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    new_key = str(payload.get("api_key") or "").strip()
+    if not new_key:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "API key required."})
+    status = set_runtime_api_key(new_key)
+    return {"status": "ok", "gemini_live": status}
 
 
 # ============================================================================

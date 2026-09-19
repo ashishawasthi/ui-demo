@@ -26,6 +26,12 @@
     activePlaybackNodes: [],
     waveformAnimId: null,
     currentAudioAmplitude: 0,
+    lastAudioSig: '',
+    turnBubbleMap: {},
+    toolCardMap: {},
+    aiStudioWs: null,
+    aiStudioConnected: false,
+    aiStudioApiKey: '',
   };
 
   // ==========================================================================
@@ -62,13 +68,13 @@
     const toast = document.createElement('div');
     toast.className = `toast-item ${severity}`;
     toast.innerHTML = `
-      <div style="font-weight:800; margin-bottom:2px;">${escapeHtml(title)}</div>
-      <div style="color:#CBD5E1; font-size:11.5px;">${escapeHtml(message)}</div>
+      <div style="font-weight:700; color:var(--ink-primary); margin-bottom:2px;">${escapeHtml(title)}</div>
+      <div style="color:var(--ink-secondary); font-size:12px;">${escapeHtml(message)}</div>
     `;
     container.appendChild(toast);
     setTimeout(() => {
       if (toast.parentNode) toast.parentNode.removeChild(toast);
-    }, 4500);
+    }, 4000);
   }
 
   function flashElement(elementOrId) {
@@ -143,14 +149,20 @@
       const modelInfo = res.data.gemini_live || {};
       const dbBadgeText = document.getElementById('dbStatusText');
       if (dbBadgeText) {
-        const modeLabel = dbInfo.mode === 'cloudsql' ? 'CloudSQL PG Live' : 'PostgreSQL 18 Live';
-        const countLabel = dbInfo.customer_count ? ` (${dbInfo.customer_count} Entities)` : '';
+        const modeLabel = dbInfo.mode === 'cloudsql' ? 'CloudSQL Connected' : 'CloudSQL / PG Connected';
+        const countLabel = dbInfo.customer_count ? ` (${dbInfo.customer_count} Profiles)` : '';
         dbBadgeText.textContent = `${modeLabel}${countLabel}`;
       }
       const modelBadge = document.getElementById('modelNameBadgeText');
       if (modelBadge && modelInfo.model) {
         modelBadge.textContent = modelInfo.model;
       }
+    }
+    const cfgRes = await apiFetch('/api/config/live');
+    if (cfgRes.ok && cfgRes.data && cfgRes.data.api_key) {
+      state.aiStudioApiKey = cfgRes.data.api_key;
+      const keyInput = document.getElementById('aiStudioApiKeyInput');
+      if (keyInput) keyInput.value = cfgRes.data.api_key;
     }
   }
 
@@ -785,32 +797,32 @@
                 .join(' + ');
               return `
                 <div class="sim-combo-item">
-                  <strong>${escapeHtml(combo.option_label || 'Valid Combination')}:</strong>
+                  <strong>${escapeHtml(combo.option_label || 'Authorized Combination')}:</strong>
                   ${escapeHtml(sigNames)}
                 </div>
               `;
             })
             .join('')
-        : `<div style="color:#FDE68A; font-size:12px;">&#x26A0; Insufficient active signatories in database to satisfy ${escapeHtml(matchedTier.rule_expression || 'rule')}.</div>`;
+        : `<div style="color:var(--google-yellow-dark); background:var(--google-yellow-tint); padding:8px 10px; border-radius:6px; font-size:12px;">&#x26A0; Additional active signatories required to satisfy ${escapeHtml(matchedTier.rule_expression || 'policy rule')}.</div>`;
 
     box.innerHTML = `
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
         <span class="badge badge-green">MATCHED: TIER ${escapeHtml(matchedTier.tier_order || 1)}</span>
-        <span style="font-family:var(--font-mono); font-size:12px; color:#38BDF8;">
+        <span style="font-family:var(--font-mono); font-size:11.5px; color:var(--google-blue-dark); font-weight:600;">
           FX Rate: 1 ${escapeHtml(simData.input_currency || 'SGD')} = ${fxRate} SGD
         </span>
       </div>
-      <div style="font-size:15px; font-weight:800; color:#FFFFFF;">
+      <div style="font-size:15px; font-weight:700; color:var(--ink-primary);">
         ${escapeHtml(matchedTier.tier_label || 'Corporate Mandate Tier')} &mdash;
-        <span style="color:#6EE7B7;">${escapeHtml(matchedTier.rule_expression || '1A')}</span>
+        <span style="color:var(--google-blue-dark);">${escapeHtml(matchedTier.rule_expression || '1A')}</span>
       </div>
-      <div style="font-size:12px; color:#CBD5E1; margin-top:2px;">
-        Evaluated SGD Equivalent: <strong style="font-family:var(--font-mono); color:#FFFFFF;">${formatCurrency(evaluatedSgd, 'SGD')}</strong>
+      <div style="font-size:12.5px; color:var(--ink-secondary); margin-top:3px;">
+        Evaluated SGD Equivalent: <strong style="font-family:var(--font-mono); color:var(--ink-primary);">${formatCurrency(evaluatedSgd, 'SGD')}</strong>
         &bull; ${escapeHtml(matchedTier.human_readable_rule || '')}
       </div>
       <div class="sim-combos-list">
-        <div style="font-size:11px; text-transform:uppercase; color:#94A3B8; font-weight:700;">
-          Eligible Database Signatory Combinations (${combos.length} Valid Options):
+        <div style="font-size:11px; text-transform:uppercase; color:var(--ink-muted); font-weight:700;">
+          Eligible Signatory Combinations (${combos.length} Valid Options):
         </div>
         ${combosHtml}
       </div>
@@ -1209,7 +1221,7 @@
 
   // ==========================================================================
   // 9. Synchronized Gemini Live (`models/gemini-3.8-live-extended-thinking`)
-  //    WebSocket Client, UI Sync Handler, & Rich Chat Stream
+  //    AI Studio v1alpha BidiGenerateContent + Backend `/ws/live` Client
   // ==========================================================================
 
   function connectLiveWebSocket() {
@@ -1224,7 +1236,7 @@
       ws.onopen = () => {
         state.wsConnected = true;
         if (badge) {
-          badge.textContent = 'WS /ws/live Connected';
+          badge.textContent = 'Connected';
           badge.className = 'badge badge-green';
         }
         ws.send(
@@ -1249,7 +1261,7 @@
       ws.onclose = () => {
         state.wsConnected = false;
         if (badge) {
-          badge.textContent = 'WS Reconnecting...';
+          badge.textContent = 'Reconnecting...';
           badge.className = 'badge badge-amber';
         }
         setTimeout(connectLiveWebSocket, 3000);
@@ -1278,12 +1290,12 @@
       }
 
       case 'tool_call_start': {
-        appendToolExecutionCard(msg.tool_name, msg.args || {}, null);
+        upsertToolExecutionCard(msg.call_id || msg.tool_name, msg.tool_name, msg.args || {}, null);
         break;
       }
 
       case 'tool_call_result': {
-        appendToolExecutionCard(msg.tool_name, msg.args || {}, msg.result || {});
+        upsertToolExecutionCard(msg.call_id || msg.tool_name, msg.tool_name, msg.args || {}, msg.result || {});
         if (msg.ui_sync) {
           handleUiSync(msg.ui_sync);
         } else if (msg.result && (msg.result.ui_action || msg.result.target_stage)) {
@@ -1297,28 +1309,41 @@
         break;
       }
 
+      case 'interrupted': {
+        clearAudioPlaybackQueueOnly();
+        break;
+      }
+
       case 'audio_out':
       case 'audio_output': {
         const b64 = msg.pcm24_base64 || msg.data;
         const rate = Number(msg.sample_rate || 24000);
         if (b64) {
-          enqueuePcm24AudioPlayback(b64, rate);
+          // Deduplicate identical consecutive audio frames so voice NEVER repeats chunks
+          const sig = `${b64.length}:${b64.slice(0, 32)}:${b64.slice(-32)}`;
+          if (sig !== state.lastAudioSig) {
+            state.lastAudioSig = sig;
+            enqueuePcm24AudioPlayback(b64, rate);
+          }
         }
         break;
       }
 
-      case 'transcript':
       case 'output_transcript':
+      case 'transcript':
       case 'assistant_text': {
         if (msg.text) {
-          appendChatMessage(msg.role === 'user' ? 'user' : 'assistant', msg.text);
+          const role = msg.role === 'user' ? 'user' : 'assistant';
+          const turnId = msg.turn_id || `${role}_latest`;
+          upsertTurnMessage(turnId, role, msg.text);
         }
         break;
       }
 
       case 'input_transcript': {
         if (msg.text) {
-          appendChatMessage('user', `🎤 ${msg.text}`);
+          const turnId = msg.turn_id || 'voice_user_latest';
+          upsertTurnMessage(turnId, 'user', `🎤 ${msg.text}`);
         }
         break;
       }
@@ -1356,11 +1381,33 @@
 
     if (syncPayload.toast_notification && syncPayload.toast_notification.message) {
       showToast(
-        syncPayload.toast_notification.title || 'Gemini Live UI Sync',
+        syncPayload.toast_notification.title || 'Mandate Updated',
         syncPayload.toast_notification.message,
         syncPayload.toast_notification.severity || 'success'
       );
     }
+  }
+
+  function upsertTurnMessage(turnId, role, text) {
+    const stream = document.getElementById('copilotChatStream');
+    if (!stream || !text) return;
+
+    if (turnId && state.turnBubbleMap[turnId] && state.turnBubbleMap[turnId].parentNode === stream) {
+      const existing = state.turnBubbleMap[turnId];
+      existing.innerHTML = `<div>${escapeHtml(text).replace(/\n/g, '<br/>')}</div>`;
+      stream.scrollTop = stream.scrollHeight;
+      return;
+    }
+
+    const div = document.createElement('div');
+    div.className = `chat-msg ${role}`;
+    if (turnId) {
+      div.setAttribute('data-turn-id', turnId);
+      state.turnBubbleMap[turnId] = div;
+    }
+    div.innerHTML = `<div>${escapeHtml(text).replace(/\n/g, '<br/>')}</div>`;
+    stream.appendChild(div);
+    stream.scrollTop = stream.scrollHeight;
   }
 
   function appendChatMessage(role, text, extraHtml = '') {
@@ -1379,32 +1426,38 @@
     if (!stream) return;
     const details = document.createElement('details');
     details.className = 'thinking-trace-box';
-    details.open = true;
+    details.open = false;
     details.innerHTML = `
-      <summary>&#x1F9E0; Extended Thinking Trace (gemini-3.8-live-extended-thinking)</summary>
+      <summary>&#x2726; View Reasoning Trace</summary>
       <div class="thinking-trace-body">${escapeHtml(traceText)}</div>
     `;
     stream.appendChild(details);
     stream.scrollTop = stream.scrollHeight;
   }
 
-  function appendToolExecutionCard(toolName, args, resultObj) {
+  function upsertToolExecutionCard(callId, toolName, args, resultObj) {
     const stream = document.getElementById('copilotChatStream');
     if (!stream) return;
     const targetStage = (resultObj && resultObj.target_stage) || state.activeStage || 1;
-    const statusText = resultObj ? (resultObj.status === 'error' ? 'ERROR' : 'EXECUTED') : 'RUNNING...';
+    const statusText = resultObj ? (resultObj.status === 'error' ? 'Policy Blocked' : 'Completed') : 'Executing...';
+    const friendlyName = String(toolName || 'Tool')
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (c) => c.toUpperCase());
 
-    const card = document.createElement('div');
-    card.className = 'tool-exec-card';
+    let card = callId && state.toolCardMap[callId];
+    if (!card || card.parentNode !== stream) {
+      card = document.createElement('div');
+      card.className = 'tool-exec-card';
+      if (callId) state.toolCardMap[callId] = card;
+      stream.appendChild(card);
+    }
+
     card.innerHTML = `
       <div class="tool-exec-header">
-        <span>&#x2699;&#xFE0F; ${escapeHtml(toolName)}</span>
+        <span>&#x2713; ${escapeHtml(friendlyName)}</span>
         <button type="button" class="tool-stage-jump-btn" data-jump-stage="${escapeHtml(targetStage)}">
-          ${escapeHtml(statusText)} &bull; Stage ${escapeHtml(targetStage)} &rarr;
+          ${escapeHtml(statusText)} &bull; Step ${escapeHtml(targetStage)} &rarr;
         </button>
-      </div>
-      <div style="font-family:var(--font-mono); font-size:10.5px; color:#94A3B8;">
-        Args: ${escapeHtml(JSON.stringify(args || {}))}
       </div>
     `;
 
@@ -1414,8 +1467,6 @@
         navigateToStage(targetStage, { flash: true });
       });
     }
-
-    stream.appendChild(card);
     stream.scrollTop = stream.scrollHeight;
   }
 
@@ -1423,7 +1474,8 @@
     const trimmed = String(promptText || '').trim();
     if (!trimmed) return;
 
-    appendChatMessage('user', trimmed);
+    const userTurnId = `local_user_${Date.now()}`;
+    upsertTurnMessage(userTurnId, 'user', trimmed);
     const inputEl = document.getElementById('copilotChatInput');
     if (inputEl) inputEl.value = '';
 
@@ -1441,12 +1493,12 @@
       traces.forEach((t) => appendThinkingTraceToStream(t));
 
       const toolCalls = res.data.tool_calls || [];
-      toolCalls.forEach((tc) => {
-        appendToolExecutionCard(tc.tool_name || tc.name, tc.args || {}, tc.result || {});
+      toolCalls.forEach((tc, idx) => {
+        upsertToolExecutionCard(tc.call_id || `${Date.now()}_${idx}`, tc.tool_name || tc.name, tc.args || {}, tc.result || {});
       });
 
       if (res.data.reply) {
-        appendChatMessage('assistant', res.data.reply);
+        upsertTurnMessage(`local_bot_${Date.now()}`, 'assistant', res.data.reply);
       }
 
       if (res.data.workspace_snapshot) {
@@ -1456,12 +1508,13 @@
         await handleUiSync(res.data.ui_sync);
       }
     } else {
-      appendChatMessage('assistant', 'Unable to complete request. Please check server logs.');
+      appendChatMessage('assistant', 'Unable to complete request. Please check your connection.');
     }
   }
 
   // ==========================================================================
-  // 10. WebAudio 16kHz PCM16 Capture, 24kHz PCM Playback & Canvas Waveform
+  // 10. Google 4-Color Equalizer Waveform, AI Studio Live v1alpha Direct +
+  //     Backend Voice Bridge, & Anti-Echo Microphone Gating
   // ==========================================================================
 
   function startWaveformVisualizer() {
@@ -1469,39 +1522,151 @@
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     let phase = 0;
+    const googleColors = ['#4285F4', '#EA4335', '#FBBC05', '#34A853'];
 
     function draw() {
       const w = canvas.width;
       const h = canvas.height;
       ctx.clearRect(0, 0, w, h);
 
-      const isActive = state.isRecordingVoice || state.activePlaybackNodes.length > 0;
-      const baseAmp = isActive ? Math.max(6, state.currentAudioAmplitude * 16) : 2.2;
-      const strokeColor = state.isRecordingVoice
-        ? '#10B981'
-        : state.activePlaybackNodes.length > 0
-        ? '#38BDF8'
-        : '#EF4444';
+      const isSpeaking = state.activePlaybackNodes.length > 0;
+      const isListening = state.isRecordingVoice && !isSpeaking;
+      const isActive = isSpeaking || isListening;
 
-      ctx.beginPath();
-      ctx.strokeStyle = strokeColor;
-      ctx.lineWidth = 2;
+      const barCount = 28;
+      const barWidth = 5;
+      const gap = (w - barCount * barWidth) / (barCount - 1);
 
-      for (let x = 0; x < w; x += 3) {
-        const y =
-          h / 2 +
-          Math.sin(x * 0.06 + phase) * baseAmp * Math.sin((x / w) * Math.PI);
-        if (x === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+      for (let i = 0; i < barCount; i++) {
+        const color = googleColors[i % googleColors.length];
+        const env = Math.sin((i / barCount) * Math.PI);
+        const wave = Math.abs(Math.sin(i * 0.45 + phase));
+        const amp = isActive
+          ? Math.max(4, Math.min(h - 4, (state.currentAudioAmplitude * 24 + 8) * env * (0.4 + 0.6 * wave)))
+          : 4;
+
+        const x = i * (barWidth + gap);
+        const y = (h - amp) / 2;
+
+        ctx.fillStyle = isActive ? color : '#DADCE0';
+        ctx.beginPath();
+        ctx.roundRect(x, y, barWidth, amp, 2.5);
+        ctx.fill();
       }
-      ctx.stroke();
 
-      phase += isActive ? 0.22 : 0.06;
+      phase += isActive ? 0.18 : 0.04;
       state.currentAudioAmplitude *= 0.9;
       state.waveformAnimId = requestAnimationFrame(draw);
     }
 
     draw();
+  }
+
+  function connectDirectAiStudioLiveSession() {
+    return new Promise((resolve) => {
+      const apiKey = (
+        (document.getElementById('aiStudioApiKeyInput') &&
+          document.getElementById('aiStudioApiKeyInput').value.trim()) ||
+        state.aiStudioApiKey ||
+        ''
+      );
+      if (!apiKey) {
+        resolve(false);
+        return;
+      }
+
+      const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(apiKey)}`;
+      let settled = false;
+
+      try {
+        const aisWs = new WebSocket(url);
+        state.aiStudioWs = aisWs;
+
+        aisWs.onopen = () => {
+          const setupPayload = {
+            setup: {
+              model: 'models/gemini-3.8-live-extended-thinking',
+              generationConfig: {
+                responseModalities: ['AUDIO'],
+                thinkingConfig: {
+                  thinkingLevel: 'LOW',
+                },
+                speechConfig: {
+                  voiceConfig: {
+                    prebuiltVoiceConfig: {
+                      voiceName: 'Aoede',
+                    },
+                  },
+                },
+              },
+              systemInstruction: {
+                parts: [
+                  {
+                    text: `You are the Corporate Mandate AI Advisor for ${state.activeCustomerId || 'CUST-001'}. Speak concisely in 1-2 sentences and never repeat yourself.`,
+                  },
+                ],
+              },
+            },
+          };
+          aisWs.send(JSON.stringify(setupPayload));
+        };
+
+        aisWs.onmessage = async (ev) => {
+          try {
+            let rawText = ev.data;
+            if (rawText instanceof Blob) {
+              rawText = await rawText.text();
+            }
+            const data = JSON.parse(rawText);
+            if (data.setupComplete) {
+              state.aiStudioConnected = true;
+              if (!settled) {
+                settled = true;
+                resolve(true);
+              }
+              return;
+            }
+            if (data.serverContent && data.serverContent.modelTurn && data.serverContent.modelTurn.parts) {
+              for (const part of data.serverContent.modelTurn.parts) {
+                if (part.inlineData && part.inlineData.data) {
+                  handleWebSocketMessage({
+                    type: 'audio_out',
+                    pcm24_base64: part.inlineData.data,
+                    sample_rate: 24000,
+                  });
+                }
+              }
+            }
+          } catch (_) {}
+        };
+
+        aisWs.onerror = () => {
+          state.aiStudioConnected = false;
+          if (!settled) {
+            settled = true;
+            resolve(false);
+          }
+        };
+
+        aisWs.onclose = () => {
+          state.aiStudioConnected = false;
+          state.aiStudioWs = null;
+          if (!settled) {
+            settled = true;
+            resolve(false);
+          }
+        };
+
+        setTimeout(() => {
+          if (!settled) {
+            settled = true;
+            resolve(state.aiStudioConnected);
+          }
+        }, 1200);
+      } catch (_) {
+        resolve(false);
+      }
+    });
   }
 
   async function toggleVoiceMicrophone() {
@@ -1520,6 +1685,7 @@
           channelCount: 1,
           echoCancellation: true,
           noiseSuppression: true,
+          autoGainControl: true,
         },
       });
       state.micStream = stream;
@@ -1529,8 +1695,15 @@
       const processor = state.micAudioCtx.createScriptProcessor(4096, 1, 1);
       state.micProcessor = processor;
 
+      // Attempt direct AI Studio v1alpha `models/gemini-3.8-live-extended-thinking` connection first;
+      // if key requires backend bridge, seamlessly stream via `/ws/live`
+      await connectDirectAiStudioLiveSession();
+
       processor.onaudioprocess = (e) => {
         if (!state.isRecordingVoice) return;
+        // CRITICAL ANTI-ECHO GATE: Do not stream mic audio while assistant is speaking aloud!
+        if (state.activePlaybackNodes.length > 0) return;
+
         const input = e.inputBuffer.getChannelData(0);
         let sum = 0;
         const pcm16 = new Int16Array(input.length);
@@ -1541,13 +1714,25 @@
         }
         state.currentAudioAmplitude = Math.min(1, (sum / input.length) * 6);
 
-        if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-          const bytes = new Uint8Array(pcm16.buffer);
-          let binary = '';
-          for (let i = 0; i < bytes.byteLength; i++) {
-            binary += String.fromCharCode(bytes[i]);
-          }
-          const b64 = btoa(binary);
+        const bytes = new Uint8Array(pcm16.buffer);
+        let binary = '';
+        for (let i = 0; i < bytes.byteLength; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        const b64 = btoa(binary);
+
+        if (state.aiStudioConnected && state.aiStudioWs && state.aiStudioWs.readyState === WebSocket.OPEN) {
+          state.aiStudioWs.send(
+            JSON.stringify({
+              realtimeInput: {
+                audio: {
+                  data: b64,
+                  mimeType: 'audio/pcm;rate=16000',
+                },
+              },
+            })
+          );
+        } else if (state.ws && state.ws.readyState === WebSocket.OPEN) {
           state.ws.send(
             JSON.stringify({
               type: 'audio_chunk',
@@ -1564,9 +1749,9 @@
       state.isRecordingVoice = true;
 
       if (orbBtn) orbBtn.classList.add('listening');
-      if (stateLabel) stateLabel.textContent = 'Streaming 16kHz PCM to Gemini Live...';
+      if (stateLabel) stateLabel.textContent = 'Listening (Gemini Live 3.8)...';
     } catch (err) {
-      showToast('Microphone Access', 'Could not access microphone; use text chat or grant audio permissions.', 'info');
+      showToast('Microphone Access', 'Please grant microphone permissions or use text chat.', 'info');
     }
   }
 
@@ -1584,10 +1769,18 @@
       state.micAudioCtx.close().catch(() => {});
       state.micAudioCtx = null;
     }
+    if (state.aiStudioWs) {
+      try { state.aiStudioWs.close(); } catch (_) {}
+      state.aiStudioWs = null;
+      state.aiStudioConnected = false;
+    }
+    if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+      state.ws.send(JSON.stringify({ type: 'audio_stream_end' }));
+    }
     const orbBtn = document.getElementById('voiceMicToggleBtn');
     const stateLabel = document.getElementById('voiceStateLabel');
     if (orbBtn) orbBtn.classList.remove('listening');
-    if (stateLabel) stateLabel.textContent = 'Voice Standby (16kHz In / 24kHz Out)';
+    if (stateLabel) stateLabel.textContent = 'Click mic for live voice';
   }
 
   function enqueuePcm24AudioPlayback(base64Pcm, sampleRate = 24000) {
@@ -1596,13 +1789,18 @@
       if (!state.playbackAudioCtx) {
         state.playbackAudioCtx = new AudioCtx({ sampleRate });
       }
+      if (state.playbackAudioCtx.state === 'suspended') {
+        state.playbackAudioCtx.resume();
+      }
+
       const binary = atob(base64Pcm);
       const byteLen = binary.length;
       const int16 = new Int16Array(Math.floor(byteLen / 2));
       for (let i = 0; i < int16.length; i++) {
         const lo = binary.charCodeAt(i * 2);
         const hi = binary.charCodeAt(i * 2 + 1);
-        int16[i] = (hi << 8) | lo;
+        const val = (hi << 8) | lo;
+        int16[i] = val >= 0x8000 ? val - 0x10000 : val;
       }
 
       const float32 = new Float32Array(int16.length);
@@ -1629,14 +1827,16 @@
       const orbBtn = document.getElementById('voiceMicToggleBtn');
       const stateLabel = document.getElementById('voiceStateLabel');
       if (orbBtn) orbBtn.classList.add('speaking');
-      if (stateLabel) stateLabel.textContent = 'Gemini Live Speaking (24kHz PCM)...';
+      if (stateLabel) stateLabel.textContent = 'Speaking...';
 
       source.onended = () => {
         state.activePlaybackNodes = state.activePlaybackNodes.filter((n) => n !== source);
         if (state.activePlaybackNodes.length === 0) {
           if (orbBtn) orbBtn.classList.remove('speaking');
-          if (stateLabel && !state.isRecordingVoice) {
-            stateLabel.textContent = 'Voice Standby (16kHz In / 24kHz Out)';
+          if (stateLabel) {
+            stateLabel.textContent = state.isRecordingVoice
+              ? 'Listening (Gemini Live 3.8)...'
+              : 'Click mic for live voice';
           }
         }
       };
@@ -1645,7 +1845,7 @@
     }
   }
 
-  function triggerBargeInInterruption() {
+  function clearAudioPlaybackQueueOnly() {
     state.activePlaybackNodes.forEach((node) => {
       try {
         node.stop();
@@ -1654,16 +1854,20 @@
     state.activePlaybackNodes = [];
     state.playbackNextStartTime = 0;
     state.currentAudioAmplitude = 0;
-
     const orbBtn = document.getElementById('voiceMicToggleBtn');
     const stateLabel = document.getElementById('voiceStateLabel');
     if (orbBtn) orbBtn.classList.remove('speaking');
-    if (stateLabel) stateLabel.textContent = 'Playback Interrupted (Barge-In Ready)';
+    if (stateLabel) {
+      stateLabel.textContent = state.isRecordingVoice ? 'Listening (Gemini Live 3.8)...' : 'Click mic for live voice';
+    }
+  }
 
+  function triggerBargeInInterruption() {
+    clearAudioPlaybackQueueOnly();
     if (state.ws && state.ws.readyState === WebSocket.OPEN) {
       state.ws.send(JSON.stringify({ type: 'barge_in' }));
     }
-    showToast('Barge-In Triggered', 'Stopped Gemini Live audio playback queue.', 'info');
+    showToast('Audio Stopped', 'Cleared audio playback queue.', 'info');
   }
 
   // ==========================================================================
@@ -1671,6 +1875,33 @@
   // ==========================================================================
 
   function bindUiEvents() {
+    // AI Studio Key Config Drawer Toggle & Save
+    const modelBadgeBtn = document.getElementById('geminiModelBadge');
+    const keyDrawer = document.getElementById('apiKeyConfigDrawer');
+    if (modelBadgeBtn && keyDrawer) {
+      modelBadgeBtn.addEventListener('click', () => {
+        keyDrawer.style.display = keyDrawer.style.display === 'none' ? 'block' : 'none';
+      });
+    }
+
+    const saveKeyBtn = document.getElementById('saveAiStudioKeyBtn');
+    if (saveKeyBtn) {
+      saveKeyBtn.addEventListener('click', async () => {
+        const keyInput = document.getElementById('aiStudioApiKeyInput');
+        const newKey = keyInput ? keyInput.value.trim() : '';
+        if (!newKey) return;
+        state.aiStudioApiKey = newKey;
+        const res = await apiFetch('/api/config/api-key', {
+          method: 'POST',
+          body: JSON.stringify({ api_key: newKey }),
+        });
+        if (res.ok) {
+          showToast('AI Studio Key Updated', 'Configured models/gemini-3.8-live-extended-thinking with updated API key.', 'success');
+          if (keyDrawer) keyDrawer.style.display = 'none';
+        }
+      });
+    }
+
     // Customer Dropdown Switcher
     const customerSelect = document.getElementById('customerSelect');
     if (customerSelect) {

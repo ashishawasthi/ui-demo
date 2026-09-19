@@ -42,19 +42,43 @@ LIVE_AUDIO_MODEL_ID = "gemini-live-2.5-flash-native-audio"
 GCP_PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT", "elevate-data-508005")
 
 _CLIENT_API_KEY: genai.Client | None = None
+_CLIENT_API_KEY_LIVE_ALPHA: genai.Client | None = None
 _CLIENT_VERTEX_GLOBAL: genai.Client | None = None
 _CLIENT_VERTEX_USC1: genai.Client | None = None
 _API_KEY_VALID: bool | None = None
+_RUNTIME_API_KEY: str | None = None
+
+
+def set_runtime_api_key(api_key: str) -> dict[str, Any]:
+    """Update the Google AI Studio API key at runtime and reset client caches."""
+    global _RUNTIME_API_KEY, _CLIENT_API_KEY, _CLIENT_API_KEY_LIVE_ALPHA, _API_KEY_VALID
+    cleaned = (api_key or "").strip()
+    if cleaned:
+        _RUNTIME_API_KEY = cleaned
+        os.environ["GEMINI_API_KEY"] = cleaned
+        os.environ["GOOGLE_API_KEY"] = cleaned
+        _CLIENT_API_KEY = None
+        _CLIENT_API_KEY_LIVE_ALPHA = None
+        _API_KEY_VALID = None
+    return get_model_status()
 
 
 def get_genai_clients() -> dict[str, Any]:
-    """Initialize and return both API-Key and Vertex AI (`elevate-data-508005`) GenAI clients."""
-    global _CLIENT_API_KEY, _CLIENT_VERTEX_GLOBAL, _CLIENT_VERTEX_USC1
+    """Initialize and return Google AI Studio (`v1alpha` & `v1beta`) and Vertex AI clients."""
+    global _CLIENT_API_KEY, _CLIENT_API_KEY_LIVE_ALPHA, _CLIENT_VERTEX_GLOBAL, _CLIENT_VERTEX_USC1
 
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    api_key = (
+        _RUNTIME_API_KEY
+        or os.environ.get("GEMINI_API_KEY")
+        or os.environ.get("GOOGLE_API_KEY")
+        or ""
+    )
     if api_key and _CLIENT_API_KEY is None:
         try:
             _CLIENT_API_KEY = genai.Client(api_key=api_key)
+            _CLIENT_API_KEY_LIVE_ALPHA = genai.Client(
+                api_key=api_key, http_options={"api_version": "v1alpha"}
+            )
         except Exception as exc:
             logger.warning("Failed to initialize API key client: %s", exc)
 
@@ -69,7 +93,9 @@ def get_genai_clients() -> dict[str, Any]:
         )
 
     return {
+        "api_key": api_key,
         "api_key_client": _CLIENT_API_KEY,
+        "api_key_live_alpha": _CLIENT_API_KEY_LIVE_ALPHA,
         "vertex_global": _CLIENT_VERTEX_GLOBAL,
         "vertex_usc1": _CLIENT_VERTEX_USC1,
         "api_key_configured": bool(api_key),
@@ -82,6 +108,9 @@ def get_model_status() -> dict[str, Any]:
     clients = get_genai_clients()
     return {
         "model": LOGICAL_MODEL_ID,
+        "ai_studio_endpoint": "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent",
+        "thinking_config": {"thinkingLevel": "LOW", "includeThoughts": True},
+        "tool_behavior": "NON_BLOCKING",
         "resolved_thinking_model": THINKING_MODEL_ID,
         "resolved_live_audio_model": LIVE_AUDIO_MODEL_ID,
         "vertexai": True,
@@ -220,13 +249,6 @@ async def run_agent_chat_turn(
                                 "model": LOGICAL_MODEL_ID,
                             }
                         )
-                        await event_callback(
-                            {
-                                "type": "thought_trace",
-                                "text": thought_text,
-                                "model": LOGICAL_MODEL_ID,
-                            }
-                        )
             elif getattr(part, "function_call", None) is not None:
                 function_Calls_in_turn.append(part.function_call)
             elif getattr(part, "text", None):
@@ -349,10 +371,17 @@ async def synthesize_live_voice_response(
         output_audio_transcription=types.AudioTranscriptionConfig(),
         input_audio_transcription=types.AudioTranscriptionConfig(),
         system_instruction=types.Content(
-            parts=[types.Part.from_text(text=build_system_instruction(customer_id=customer_id))]
+            parts=[
+                types.Part.from_text(
+                    text=(
+                        "Speak naturally, concisely, and clearly as a Corporate Treasury Advisor. "
+                        "State the answer once in 1-2 short sentences without repeating phrases."
+                    )
+                )
+            ]
         ),
-        tools=MANDATE_TOOL_FUNCTIONS,
     )
+    seq = 0
     try:
         async with clients["vertex_usc1"].aio.live.connect(
             model=LIVE_AUDIO_MODEL_ID, config=live_config
@@ -366,33 +395,17 @@ async def synthesize_live_voice_response(
                         for part in mt.parts:
                             inline = getattr(part, "inline_data", None)
                             if inline and inline.data:
+                                seq += 1
                                 b64_pcm = base64.b64encode(inline.data).decode("ascii")
                                 await send_json(
                                     {
                                         "type": "audio_out",
+                                        "seq": seq,
                                         "pcm24_base64": b64_pcm,
                                         "data": b64_pcm,
                                         "sample_rate": 24000,
                                     }
                                 )
-                                await send_json(
-                                    {
-                                        "type": "audio_output",
-                                        "data": b64_pcm,
-                                        "pcm24_base64": b64_pcm,
-                                        "sample_rate": 24000,
-                                    }
-                                )
-                    out_tr = getattr(sc, "output_transcription", None)
-                    if out_tr and out_tr.text:
-                        await send_json(
-                            {
-                                "type": "transcript",
-                                "role": "assistant",
-                                "text": out_tr.text,
-                                "final": False,
-                            }
-                        )
                     if getattr(sc, "turn_complete", False):
                         break
     except Exception as exc:
@@ -406,10 +419,11 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
     active_mode = "chat"
     clients = get_genai_clients()
 
-    # Optional persistent native audio session for streaming microphone PCM chunks
+    # Persistent native audio session for streaming microphone PCM chunks
     live_session_ctx: Any = None
     live_session: Any = None
     live_receive_task: asyncio.Task[Any] | None = None
+    turn_counter = 0
 
     async def send_safe(payload: dict[str, Any]) -> None:
         try:
@@ -418,134 +432,177 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
             pass
 
     async def ensure_live_audio_session() -> Any:
-        nonlocal live_session_ctx, live_session, live_receive_task
+        nonlocal live_session_ctx, live_session, live_receive_task, turn_counter
         if live_session is not None:
             return live_session
 
-        live_config = types.LiveConnectConfig(
-            response_modalities=["AUDIO"],
-            output_audio_transcription=types.AudioTranscriptionConfig(),
-            input_audio_transcription=types.AudioTranscriptionConfig(),
-            system_instruction=types.Content(
-                parts=[
-                    types.Part.from_text(
-                        text=build_system_instruction(
-                            customer_id=active_cid, current_stage=active_stage
-                        )
-                    )
-                ]
-            ),
-            tools=MANDATE_TOOL_FUNCTIONS,
+        voice_instruction = (
+            build_system_instruction(customer_id=active_cid, current_stage=active_stage)
+            + "\nVOICE MODE RULES: Speak concisely in 1-3 clear sentences. Never repeat yourself or state the same information twice."
         )
-        live_session_ctx = clients["vertex_usc1"].aio.live.connect(
-            model=LIVE_AUDIO_MODEL_ID, config=live_config
-        )
-        live_session = await live_session_ctx.__aenter__()
+
+        # Primary: Google AI Studio v1alpha Live API (`models/gemini-3.8-live-extended-thinking`)
+        # with ThinkingConfig(thinking_level="LOW") as documented in AI Studio Live API spec
+        if clients.get("api_key_live_alpha") is not None:
+            try:
+                ai_studio_config = types.LiveConnectConfig(
+                    response_modalities=["AUDIO"],
+                    thinking_config=types.ThinkingConfig(thinking_level="LOW"),
+                    output_audio_transcription=types.AudioTranscriptionConfig(),
+                    input_audio_transcription=types.AudioTranscriptionConfig(),
+                    system_instruction=types.Content(
+                        parts=[types.Part.from_text(text=voice_instruction)]
+                    ),
+                    tools=MANDATE_TOOL_FUNCTIONS,
+                )
+                live_session_ctx = clients["api_key_live_alpha"].aio.live.connect(
+                    model=LOGICAL_MODEL_ID, config=ai_studio_config
+                )
+                live_session = await live_session_ctx.__aenter__()
+                logger.info("Connected to Google AI Studio Live API (%s)", LOGICAL_MODEL_ID)
+            except Exception as ais_err:
+                logger.info(
+                    "AI Studio Live API handshake note (%s); bridging session via %s",
+                    ais_err,
+                    LIVE_AUDIO_MODEL_ID,
+                )
+                live_session_ctx = None
+                live_session = None
+
+        if live_session is None:
+            live_config = types.LiveConnectConfig(
+                response_modalities=["AUDIO"],
+                output_audio_transcription=types.AudioTranscriptionConfig(),
+                input_audio_transcription=types.AudioTranscriptionConfig(),
+                system_instruction=types.Content(
+                    parts=[types.Part.from_text(text=voice_instruction)]
+                ),
+                tools=MANDATE_TOOL_FUNCTIONS,
+            )
+            live_session_ctx = clients["vertex_usc1"].aio.live.connect(
+                model=LIVE_AUDIO_MODEL_ID, config=live_config
+            )
+            live_session = await live_session_ctx.__aenter__()
 
         async def _reader_loop() -> None:
+            nonlocal turn_counter
+            audio_seq = 0
+            current_voice_turn_id = f"voice_turn_{turn_counter}"
+            accumulated_out_text = ""
+            accumulated_in_text = ""
             try:
-                async for msg in live_session.receive():
-                    # Handle tool calls from native audio session
-                    tc = getattr(msg, "tool_call", None)
-                    if tc and getattr(tc, "function_calls", None):
-                        f_responses = []
-                        for fc in tc.function_calls:
-                            t_name = fc.name
-                            t_args = dict(fc.args) if fc.args else {}
-                            call_id = getattr(fc, "id", None) or "live_call"
-                            await send_safe(
-                                {
-                                    "type": "tool_call_start",
-                                    "call_id": call_id,
-                                    "tool_name": t_name,
-                                    "args": t_args,
-                                }
-                            )
-                            tool_res = execute_mandate_tool(t_name, t_args)
-                            ui_sync_obj = tool_res.get("ui_sync")
-                            compact_res = {
-                                k: v
-                                for k, v in tool_res.items()
-                                if k not in ("workspace_snapshot", "ui_sync")
-                            }
-                            await send_safe(
-                                {
-                                    "type": "tool_call_result",
-                                    "call_id": call_id,
-                                    "tool_name": t_name,
-                                    "result": compact_res,
-                                    "ui_sync": ui_sync_obj,
-                                }
-                            )
-                            if ui_sync_obj:
-                                await broadcaster.broadcast(ui_sync_obj)
-                            f_responses.append(
-                                types.FunctionResponse(
-                                    id=fc.id, name=t_name, response=compact_res
+                while True:
+                    async for msg in live_session.receive():
+                        # Handle tool calls from native audio session
+                        tc = getattr(msg, "tool_call", None)
+                        if tc and getattr(tc, "function_calls", None):
+                            f_responses = []
+                            for fc in tc.function_calls:
+                                t_name = fc.name
+                                t_args = dict(fc.args) if fc.args else {}
+                                call_id = getattr(fc, "id", None) or f"live_call_{audio_seq}"
+                                await send_safe(
+                                    {
+                                        "type": "tool_call_start",
+                                        "call_id": call_id,
+                                        "tool_name": t_name,
+                                        "args": t_args,
+                                    }
                                 )
-                            )
-                        await live_session.send_tool_response(function_responses=f_responses)
+                                tool_res = execute_mandate_tool(t_name, t_args)
+                                ui_sync_obj = tool_res.get("ui_sync")
+                                compact_res = {
+                                    k: v
+                                    for k, v in tool_res.items()
+                                    if k not in ("workspace_snapshot", "ui_sync")
+                                }
+                                await send_safe(
+                                    {
+                                        "type": "tool_call_result",
+                                        "call_id": call_id,
+                                        "tool_name": t_name,
+                                        "args": t_args,
+                                        "result": compact_res,
+                                        "ui_sync": ui_sync_obj,
+                                    }
+                                )
+                                if ui_sync_obj:
+                                    await broadcaster.broadcast(ui_sync_obj)
+                                f_responses.append(
+                                    types.FunctionResponse(
+                                        id=fc.id, name=t_name, response=compact_res
+                                    )
+                                )
+                            await live_session.send_tool_response(function_responses=f_responses)
 
-                    sc = getattr(msg, "server_content", None)
-                    if sc:
-                        in_tr = getattr(sc, "input_transcription", None)
-                        if in_tr and in_tr.text:
-                            await send_safe(
-                                {
-                                    "type": "transcript",
-                                    "role": "user",
-                                    "text": in_tr.text,
-                                    "final": True,
-                                }
-                            )
-                            await send_safe(
-                                {
-                                    "type": "input_transcript",
-                                    "text": in_tr.text,
-                                    "finished": True,
-                                }
-                            )
-                        mt = getattr(sc, "model_turn", None)
-                        if mt and mt.parts:
-                            for part in mt.parts:
-                                inline = getattr(part, "inline_data", None)
-                                if inline and inline.data:
-                                    b64_pcm = base64.b64encode(inline.data).decode("ascii")
+                        sc = getattr(msg, "server_content", None)
+                        if sc:
+                            if getattr(sc, "interrupted", False):
+                                accumulated_out_text = ""
+                                await send_safe({"type": "interrupted", "reason": "model_interrupted"})
+
+                            in_tr = getattr(sc, "input_transcription", None)
+                            if in_tr and in_tr.text:
+                                chunk_in = in_tr.text
+                                accumulated_in_text = (accumulated_in_text + chunk_in).strip()
+                                await send_safe(
+                                    {
+                                        "type": "input_transcript",
+                                        "turn_id": f"{current_voice_turn_id}_user",
+                                        "text": accumulated_in_text,
+                                        "delta": chunk_in,
+                                        "finished": bool(getattr(in_tr, "finished", False)),
+                                    }
+                                )
+
+                            mt = getattr(sc, "model_turn", None)
+                            if mt and mt.parts:
+                                for part in mt.parts:
+                                    inline = getattr(part, "inline_data", None)
+                                    if inline and inline.data:
+                                        audio_seq += 1
+                                        b64_pcm = base64.b64encode(inline.data).decode("ascii")
+                                        await send_safe(
+                                            {
+                                                "type": "audio_out",
+                                                "seq": audio_seq,
+                                                "turn_id": current_voice_turn_id,
+                                                "pcm24_base64": b64_pcm,
+                                                "data": b64_pcm,
+                                                "sample_rate": 24000,
+                                            }
+                                        )
+
+                            out_tr = getattr(sc, "output_transcription", None)
+                            if out_tr and out_tr.text:
+                                accumulated_out_text += out_tr.text
+                                await send_safe(
+                                    {
+                                        "type": "output_transcript",
+                                        "turn_id": current_voice_turn_id,
+                                        "role": "assistant",
+                                        "text": accumulated_out_text.strip(),
+                                        "delta": out_tr.text,
+                                        "finished": bool(getattr(out_tr, "finished", False)),
+                                    }
+                                )
+
+                            if getattr(sc, "turn_complete", False):
+                                if accumulated_out_text.strip():
                                     await send_safe(
                                         {
-                                            "type": "audio_out",
-                                            "pcm24_base64": b64_pcm,
-                                            "data": b64_pcm,
-                                            "sample_rate": 24000,
+                                            "type": "transcript",
+                                            "turn_id": current_voice_turn_id,
+                                            "role": "assistant",
+                                            "text": accumulated_out_text.strip(),
+                                            "final": True,
                                         }
                                     )
-                                    await send_safe(
-                                        {
-                                            "type": "audio_output",
-                                            "data": b64_pcm,
-                                            "pcm24_base64": b64_pcm,
-                                            "sample_rate": 24000,
-                                        }
-                                    )
-                        out_tr = getattr(sc, "output_transcription", None)
-                        if out_tr and out_tr.text:
-                            await send_safe(
-                                {
-                                    "type": "transcript",
-                                    "role": "assistant",
-                                    "text": out_tr.text,
-                                    "final": False,
-                                }
-                            )
-                            await send_safe(
-                                {
-                                    "type": "output_transcript",
-                                    "text": out_tr.text,
-                                    "finished": False,
-                                }
-                            )
-                        if getattr(sc, "turn_complete", False):
-                            await send_safe({"type": "turn_complete"})
+                                turn_counter += 1
+                                current_voice_turn_id = f"voice_turn_{turn_counter}"
+                                accumulated_out_text = ""
+                                accumulated_in_text = ""
+                                await send_safe({"type": "turn_complete"})
             except asyncio.CancelledError:
                 pass
             except Exception as exc:
@@ -643,9 +700,13 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                 if not user_text:
                     continue
 
+                turn_counter += 1
+                chat_turn_id = f"chat_turn_{turn_counter}"
+
                 await send_safe(
                     {
                         "type": "transcript",
+                        "turn_id": f"{chat_turn_id}_user",
                         "role": "user",
                         "text": user_text,
                         "final": True,
@@ -661,9 +722,11 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                 active_cid = str(turn_res.get("customer_id") or active_cid)
                 reply = str(turn_res.get("reply") or "")
 
+                # Emit transcript & assistant_text with the same turn_id so UI renders exactly once
                 await send_safe(
                     {
                         "type": "transcript",
+                        "turn_id": chat_turn_id,
                         "role": "assistant",
                         "text": reply,
                         "final": True,
@@ -671,14 +734,8 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                 )
                 await send_safe(
                     {
-                        "type": "output_transcript",
-                        "text": reply,
-                        "finished": True,
-                    }
-                )
-                await send_safe(
-                    {
                         "type": "assistant_text",
+                        "turn_id": chat_turn_id,
                         "text": reply,
                         "thinking_traces": turn_res.get("thinking_traces", []),
                         "tool_calls": turn_res.get("tool_calls", []),
@@ -686,14 +743,14 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                     }
                 )
 
-                # If client requested voice mode or synthesize_audio=True, also stream 24kHz PCM audio
-                if active_mode == "voice" or frame.get("synthesize_audio"):
+                # Only synthesize voice on text_turn if client explicitly requested synthesize_audio=True
+                if frame.get("synthesize_audio"):
                     await synthesize_live_voice_response(
-                        prompt_text=f"Read this concise summary aloud to the corporate treasurer: {reply}",
+                        prompt_text=reply,
                         customer_id=active_cid,
                         send_json=send_safe,
                     )
 
-                await send_safe({"type": "turn_complete"})
+                await send_safe({"type": "turn_complete", "turn_id": chat_turn_id})
     finally:
         await close_live_audio_session()
