@@ -765,6 +765,7 @@ async def api_fx_pretrade_and_book(payload: dict[str, Any] = Body(...)) -> dict[
     }
 
 
+@app.get("/favicon.ico", include_in_schema=False)
 @app.get("/dbs-logo.png")
 @app.get("/static/dbs-logo.png")
 async def serve_dbs_logo() -> Any:

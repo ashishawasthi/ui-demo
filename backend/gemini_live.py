@@ -98,11 +98,102 @@ _CLIENT_VERTEX_GLOBAL: genai.Client | None = None
 _CLIENT_VERTEX_USC1: genai.Client | None = None
 _API_KEY_VALID: bool | None = None
 _RUNTIME_API_KEY: str | None = None
+_SECRET_MANAGER_SECRET_ID = os.environ.get("GEMINI_API_KEY_SECRET_ID", "gemini-live-api-key")
+_EXPIRED_KEY_PREFIX = "AIzaSyCE7i"
+_SECRET_CACHE_VALUE: str | None = None
+_SECRET_CACHE_FETCHED_AT: float = 0.0
+_SECRET_CACHE_TTL_SECONDS: float = 60.0
 
 # The API key path used to be disabled permanently on the first failure of any kind, including a
 # single transient 503. Instead, trip a circuit breaker that automatically re-arms after a cooldown.
 _API_KEY_COOLDOWN_SECONDS = float(os.environ.get("API_KEY_COOLDOWN_SECONDS", "120"))
 _API_KEY_DISABLED_UNTIL: float = 0.0
+
+
+def _is_expired_key(key_str: str) -> bool:
+    """Return True if the key string is empty or matches a revoked key prefix."""
+    cleaned = (key_str or "").strip()
+    return not cleaned or cleaned.startswith(_EXPIRED_KEY_PREFIX)
+
+
+def fetch_api_key_from_secret_manager(
+    secret_id: str = _SECRET_MANAGER_SECRET_ID,
+    force_refresh: bool = False,
+) -> str:
+    """Fetch the latest Gemini Live API key in real time from Google Cloud Secret Manager.
+
+    Reads `projects/{GCP_PROJECT}/secrets/{secret_id}/versions/latest:access` via the Secret
+    Manager REST API using Application Default Credentials (Cloud Run service account or local
+    ADC), caching the value for 60 seconds unless `force_refresh=True` is requested after an
+    auth/key error.
+    """
+    global _SECRET_CACHE_VALUE, _SECRET_CACHE_FETCHED_AT
+    now = time.monotonic()
+    if (
+        not force_refresh
+        and _SECRET_CACHE_VALUE
+        and (now - _SECRET_CACHE_FETCHED_AT) < _SECRET_CACHE_TTL_SECONDS
+    ):
+        return _SECRET_CACHE_VALUE
+
+    try:
+        import google.auth
+        from google.auth.transport.requests import Request as GoogleAuthRequest
+        import httpx
+
+        creds, _ = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        if not creds.valid:
+            creds.refresh(GoogleAuthRequest())
+        url = (
+            f"https://secretmanager.googleapis.com/v1/projects/{GCP_PROJECT}"
+            f"/secrets/{secret_id}/versions/latest:access"
+        )
+        resp = httpx.get(
+            url,
+            headers={"Authorization": f"Bearer {creds.token}"},
+            timeout=3.5,
+        )
+        if resp.status_code == 200:
+            data_b64 = (resp.json().get("payload") or {}).get("data", "")
+            if data_b64:
+                decoded = base64.b64decode(data_b64).decode("utf-8").strip()
+                if not _is_expired_key(decoded):
+                    _SECRET_CACHE_VALUE = decoded
+                    _SECRET_CACHE_FETCHED_AT = now
+                    logger.info(
+                        "Fetched live Gemini API key from Secret Manager (%s, prefix=%s...)",
+                        secret_id,
+                        decoded[:6],
+                    )
+                    return decoded
+    except Exception as sm_exc:
+        logger.debug("Secret Manager real-time lookup note: %s", sm_exc)
+
+    return _SECRET_CACHE_VALUE or ""
+
+
+def _resolve_active_api_key(force_secret_refresh: bool = False) -> str:
+    """Resolve the best available Gemini API key from Secret Manager or environment."""
+    if _RUNTIME_API_KEY and not _is_expired_key(_RUNTIME_API_KEY) and not force_secret_refresh:
+        return _RUNTIME_API_KEY
+
+    env_key = (
+        os.environ.get("GEMINI_API_KEY")
+        or os.environ.get("GOOGLE_API_KEY")
+        or ""
+    ).strip()
+
+    if env_key and not _is_expired_key(env_key) and not force_secret_refresh:
+        return env_key
+
+    sm_key = fetch_api_key_from_secret_manager(force_refresh=force_secret_refresh)
+    if sm_key:
+        os.environ["GEMINI_API_KEY"] = sm_key
+        os.environ["GOOGLE_API_KEY"] = sm_key
+        return sm_key
+    return env_key
 
 
 def _api_key_path_available() -> bool:
@@ -111,8 +202,27 @@ def _api_key_path_available() -> bool:
 
 
 def _trip_api_key_breaker() -> None:
-    """Temporarily disable the API key path after a failure."""
-    global _API_KEY_DISABLED_UNTIL, _API_KEY_VALID
+    """Refresh key from Secret Manager on failure; trip cooldown only if no backup key is available."""
+    global _API_KEY_DISABLED_UNTIL, _API_KEY_VALID, _RUNTIME_API_KEY
+    global _CLIENT_API_KEY, _CLIENT_API_KEY_LIVE_ALPHA
+    current = (
+        _RUNTIME_API_KEY
+        or os.environ.get("GEMINI_API_KEY")
+        or os.environ.get("GOOGLE_API_KEY")
+        or ""
+    ).strip()
+    fresh = fetch_api_key_from_secret_manager(force_refresh=True)
+    if fresh and fresh != current:
+        logger.info("Hot-swapping failed Gemini API key with fresh Secret Manager key (prefix=%s...)", fresh[:6])
+        _RUNTIME_API_KEY = fresh
+        os.environ["GEMINI_API_KEY"] = fresh
+        os.environ["GOOGLE_API_KEY"] = fresh
+        _CLIENT_API_KEY = None
+        _CLIENT_API_KEY_LIVE_ALPHA = None
+        _API_KEY_VALID = True
+        _API_KEY_DISABLED_UNTIL = 0.0
+        return
+
     _API_KEY_DISABLED_UNTIL = time.monotonic() + _API_KEY_COOLDOWN_SECONDS
     _API_KEY_VALID = False
 
@@ -138,17 +248,12 @@ def get_genai_clients() -> dict[str, Any]:
     """Initialize and return Google AI Studio (`v1alpha` & `v1beta`) and Vertex AI clients."""
     global _CLIENT_API_KEY, _CLIENT_API_KEY_LIVE_ALPHA, _CLIENT_VERTEX_GLOBAL, _CLIENT_VERTEX_USC1
 
-    api_key = (
-        _RUNTIME_API_KEY
-        or os.environ.get("GEMINI_API_KEY")
-        or os.environ.get("GOOGLE_API_KEY")
-        or ""
-    )
+    api_key = _resolve_active_api_key(force_secret_refresh=False)
     if api_key and _CLIENT_API_KEY is None:
         try:
-            _CLIENT_API_KEY = genai.Client(api_key=api_key)
+            _CLIENT_API_KEY = genai.Client(vertexai=False, api_key=api_key)
             _CLIENT_API_KEY_LIVE_ALPHA = genai.Client(
-                api_key=api_key, http_options={"api_version": "v1alpha"}
+                vertexai=False, api_key=api_key, http_options={"api_version": "v1alpha"}
             )
         except Exception as exc:
             logger.warning("Failed to initialize API key client: %s", exc)
@@ -590,58 +695,7 @@ async def synthesize_live_voice_response(
     """
     del customer_id  # Narration is context-free by design.
 
-    clients = get_genai_clients()
-    live_config = types.LiveConnectConfig(
-        response_modalities=["AUDIO"],
-        speech_config=build_joy_speech_config(),
-        output_audio_transcription=types.AudioTranscriptionConfig(),
-        system_instruction=types.Content(
-            parts=[
-                types.Part.from_text(
-                    text=(
-                        "You are the speaking voice of Joy, a DBS corporate banker. "
-                        "Read the user's message aloud EXACTLY as written. Do NOT add, remove, "
-                        "rephrase, translate, summarize, or answer anything. Do NOT role-play as "
-                        "a customer. Do NOT ask follow-up questions. Speak only the given "
-                        "sentence, once, then stop.\n\n" + JOY_VOICE_PERSONA
-                    )
-                )
-            ]
-        ),
-    )
-    seq = 0
-    vertex_usc1 = clients.get("vertex_usc1")
-    if vertex_usc1 is None:
-        logger.warning("Cannot synthesize voice: Vertex us-central1 client unavailable.")
-        return
-    try:
-        async with vertex_usc1.aio.live.connect(
-            model=LIVE_AUDIO_MODEL_ID, config=live_config
-        ) as session:
-            await session.send(input=prompt_text, end_of_turn=True)
-            async for msg in session.receive():
-                sc = getattr(msg, "server_content", None)
-                if sc:
-                    mt = getattr(sc, "model_turn", None)
-                    if mt and mt.parts:
-                        for part in mt.parts:
-                            inline = getattr(part, "inline_data", None)
-                            if inline and inline.data:
-                                seq += 1
-                                b64_pcm = base64.b64encode(inline.data).decode("ascii")
-                                await send_json(
-                                    {
-                                        "type": "audio_out",
-                                        "seq": seq,
-                                        "pcm24_base64": b64_pcm,
-                                        "data": b64_pcm,
-                                        "sample_rate": 24000,
-                                    }
-                                )
-                    if getattr(sc, "turn_complete", False):
-                        break
-    except Exception as exc:
-        logger.warning("Live native audio stream warning: %s", exc)
+    await speak_verbatim_as_joy(prompt_text, send_json)
 
 
 JOY_GREETING_TEXT = (
@@ -661,36 +715,49 @@ async def speak_verbatim_as_joy(
     This dedicated narration session has a single job: speak the given sentence as the banker.
     """
     clients = get_genai_clients()
-    narration_config = types.LiveConnectConfig(
-        response_modalities=["AUDIO"],
-        speech_config=build_joy_speech_config(),
-        system_instruction=types.Content(
-            parts=[
-                types.Part.from_text(
-                    text=(
-                        "You are the speaking voice of Joy, a female DBS corporate banker. "
-                        "Read the user's message aloud EXACTLY as written. Do NOT add, remove, "
-                        "rephrase, translate, or answer anything. Do NOT role-play as a customer. "
-                        "Do NOT ask follow-up questions. Speak only the given sentence, once, "
-                        "then stop.\n\n" + JOY_VOICE_PERSONA
-                    )
+    narration_sys = types.Content(
+        parts=[
+            types.Part.from_text(
+                text=(
+                    "You are the speaking voice of Joy, a female DBS corporate banker. "
+                    "Read the user's message aloud EXACTLY as written. Do NOT add, remove, "
+                    "rephrase, translate, or answer anything. Do NOT role-play as a customer. "
+                    "Do NOT ask follow-up questions. Speak only the given sentence, once, "
+                    "then stop.\n\n" + JOY_VOICE_PERSONA
                 )
-            ]
-        ),
+            )
+        ]
     )
 
-    # Prefer AI Studio (API key) since Cloudtop ADC may have an expired RAPT; fall back to Vertex us-central1.
+    # Prefer AI Studio (`gemini-3.8-live` per Get_started_LiveAPI.py, then `models/gemini-3.8-live-extended-thinking`)
+    # backed by Google Cloud Secret Manager; fall back to Vertex us-central1 if needed.
     candidates = [
-        ("ai_studio", clients.get("api_key_live_alpha"), LOGICAL_MODEL_ID),
-        ("vertex_usc1", clients.get("vertex_usc1"), LIVE_AUDIO_MODEL_ID),
+        ("ai_studio_38_live", clients.get("api_key"), "gemini-3.8-live", False),
+        ("ai_studio", clients.get("api_key_live_alpha"), LOGICAL_MODEL_ID, True),
+        ("vertex_usc1", clients.get("vertex_usc1"), LIVE_AUDIO_MODEL_ID, False),
     ]
-    for label, client, model_id in candidates:
+    for label, client, model_id, needs_thinking in candidates:
         if client is None:
             continue
+        cfg_kwargs: dict[str, Any] = {
+            "response_modalities": ["AUDIO"],
+            "speech_config": build_joy_speech_config(),
+            "system_instruction": narration_sys,
+        }
+        if needs_thinking:
+            cfg_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="LOW")
+        narration_config = types.LiveConnectConfig(**cfg_kwargs)
+
         seq = 0
         try:
             async with client.aio.live.connect(model=model_id, config=narration_config) as session:
-                await session.send(input=text_to_speak, end_of_turn=True)
+                await session.send_client_content(
+                    turns=types.Content(
+                        role="user",
+                        parts=[types.Part.from_text(text=text_to_speak)],
+                    ),
+                    turn_complete=True,
+                )
                 async for msg in session.receive():
                     sc = getattr(msg, "server_content", None)
                     if not sc:
@@ -714,10 +781,12 @@ async def speak_verbatim_as_joy(
                     if getattr(sc, "turn_complete", False):
                         break
             if seq > 0:
-                logger.info("Spoke verbatim Joy greeting via %s (%d audio chunks).", label, seq)
+                logger.info("Spoke verbatim Joy audio via %s (%d audio chunks).", label, seq)
                 return True
         except Exception as exc:
-            logger.info("Verbatim greeting via %s unavailable: %s", label, exc)
+            logger.info("Verbatim audio via %s unavailable: %s", label, exc)
+            if label == "ai_studio":
+                _trip_api_key_breaker()
     return False
 
 
@@ -757,40 +826,58 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
         )
 
         # Primary: Google AI Studio v1alpha Live API (`models/gemini-3.8-live-extended-thinking`)
-        # with ThinkingConfig(thinking_level="LOW") as documented in AI Studio Live API spec
-        if clients.get("api_key_live_alpha") is not None:
-            try:
-                ai_studio_config = types.LiveConnectConfig(
-                    response_modalities=["AUDIO"],
-                    speech_config=build_joy_speech_config(),
-                    thinking_config=types.ThinkingConfig(thinking_level="LOW"),
-                    output_audio_transcription=types.AudioTranscriptionConfig(),
-                    input_audio_transcription=types.AudioTranscriptionConfig(),
-                    system_instruction=types.Content(
-                        parts=[types.Part.from_text(text=voice_instruction)]
-                    ),
-                    tools=MANDATE_TOOL_FUNCTIONS,
-                )
-                live_session_ctx = clients["api_key_live_alpha"].aio.live.connect(
-                    model=LOGICAL_MODEL_ID, config=ai_studio_config
-                )
-                live_session = await live_session_ctx.__aenter__()
-                logger.info("Connected to Google AI Studio Live API (%s)", LOGICAL_MODEL_ID)
-            except Exception as ais_err:
-                logger.info(
-                    "AI Studio Live API handshake note (%s); bridging session via %s",
-                    ais_err,
-                    LIVE_AUDIO_MODEL_ID,
-                )
-                live_session_ctx = None
-                live_session = None
+        compression_cfg = types.ContextWindowCompressionConfig(
+            trigger_tokens=25600,
+            sliding_window=types.SlidingWindow(target_tokens=12800),
+        )
 
-        if live_session is None:
+        # Primary: Google AI Studio Live API (`gemini-3.8-live` / `models/gemini-3.8-live-extended-thinking`)
+        # following https://github.com/google-gemini/cookbook/blob/main/quickstarts/Get_started_LiveAPI.py
+        if clients.get("api_key_live_alpha") is not None or clients.get("api_key") is not None:
+            for live_client, candidate_model, use_thinking in [
+                (clients.get("api_key"), "gemini-3.8-live", False),
+                (clients.get("api_key_live_alpha"), LOGICAL_MODEL_ID, True),
+            ]:
+                if live_client is None:
+                    continue
+                try:
+                    cfg_kwargs: dict[str, Any] = {
+                        "response_modalities": ["AUDIO"],
+                        "speech_config": build_joy_speech_config(),
+                        "output_audio_transcription": types.AudioTranscriptionConfig(),
+                        "input_audio_transcription": types.AudioTranscriptionConfig(),
+                        "context_window_compression": compression_cfg,
+                        "system_instruction": types.Content(
+                            parts=[types.Part.from_text(text=voice_instruction)]
+                        ),
+                        "tools": MANDATE_TOOL_FUNCTIONS,
+                    }
+                    if use_thinking:
+                        cfg_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="LOW")
+                    ai_studio_config = types.LiveConnectConfig(**cfg_kwargs)
+                    live_session_ctx = live_client.aio.live.connect(
+                        model=candidate_model, config=ai_studio_config
+                    )
+                    live_session = await live_session_ctx.__aenter__()
+                    logger.info("Connected to Gemini Live API (%s)", candidate_model)
+                    break
+                except Exception as ais_err:
+                    logger.info(
+                        "Gemini Live API (%s) handshake note (%s); trying next candidate",
+                        candidate_model,
+                        ais_err,
+                    )
+                    _trip_api_key_breaker()
+                    live_session_ctx = None
+                    live_session = None
+
+        if live_session is None and clients.get("vertex_usc1") is not None:
             live_config = types.LiveConnectConfig(
                 response_modalities=["AUDIO"],
                 speech_config=build_joy_speech_config(),
                 output_audio_transcription=types.AudioTranscriptionConfig(),
                 input_audio_transcription=types.AudioTranscriptionConfig(),
+                context_window_compression=compression_cfg,
                 system_instruction=types.Content(
                     parts=[types.Part.from_text(text=voice_instruction)]
                 ),
@@ -821,155 +908,159 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
         async def _reader_loop() -> None:
             # `active_cid` / `active_stage` MUST be declared nonlocal. Without this, the
             # assignments further down (from a tool's ui_sync payload) create function-local
-            # variables and the outer session state never updates, so a profile switch made by
-            # voice was silently discarded for every subsequent turn.
+            # variables and the outer session state never updates.
             nonlocal turn_counter, user_has_spoken_meaningfully, active_cid, active_stage
             audio_seq = 0
             current_voice_turn_id = f"voice_turn_{turn_counter}"
             accumulated_out_text = ""
             accumulated_in_text = ""
             try:
-                # NOTE: this used to be `while True: async for msg in live_session.receive()`.
-                # When the session closed cleanly the `async for` simply ended, and the outer
-                # `while True` immediately re-entered receive() on a dead session, producing a
-                # tight CPU-pegging loop. A single pass is correct: receive() yields until the
-                # session terminates, and reconnection is handled by ensure_live_audio_session().
-                async for msg in live_session.receive():
-                    # Handle tool calls from native audio session
-                    tc = getattr(msg, "tool_call", None)
-                    if tc and getattr(tc, "function_calls", None):
-                        # Never allow unsolicited tool calls before the user has actually spoken a request
-                        if not user_has_spoken_meaningfully:
-                            f_responses = [
-                                types.FunctionResponse(
-                                    id=fc.id,
-                                    name=fc.name,
-                                    response={
-                                        "status": "ready",
-                                        "instruction": "Do not list profiles or call tools until the user asks a specific question. Complete your brief greeting first.",
-                                    },
-                                )
-                                for fc in tc.function_calls
-                            ]
-                            await live_session.send_tool_response(function_responses=f_responses)
-                            continue
+                # Per `Get_started_LiveAPI.py` and `google.genai.live.AsyncSession.receive`:
+                # `session.receive()` yields responses for ONE model turn and breaks when
+                # `server_content.turn_complete` is True. The outer `while` re-enters `receive()`
+                # for every subsequent turn, while `if not got_any: break` exits cleanly without
+                # spinning when the underlying WebSocket actually closes (EOF).
+                while live_session is not None:
+                    got_any = False
+                    async for msg in live_session.receive():
+                        got_any = True
+                        # Handle tool calls from native audio session
+                        tc = getattr(msg, "tool_call", None)
+                        if tc and getattr(tc, "function_calls", None):
+                            # Never allow unsolicited tool calls before the user has actually spoken a request
+                            if not user_has_spoken_meaningfully:
+                                f_responses = [
+                                    types.FunctionResponse(
+                                        id=fc.id,
+                                        name=fc.name,
+                                        response={
+                                            "status": "ready",
+                                            "instruction": "Do not list profiles or call tools until the user asks a specific question. Complete your brief greeting first.",
+                                        },
+                                    )
+                                    for fc in tc.function_calls
+                                ]
+                                await live_session.send_tool_response(function_responses=f_responses)
+                                continue
 
-                        f_responses = []
-                        for fc in tc.function_calls:
-                            t_name = fc.name
-                            t_args = dict(fc.args) if fc.args else {}
-                            call_id = getattr(fc, "id", None) or f"live_call_{audio_seq}"
-                            await send_safe(
-                                {
-                                    "type": "tool_call_start",
-                                    "call_id": call_id,
-                                    "tool_name": t_name,
-                                    "args": t_args,
-                                }
-                            )
-                            tool_res = await asyncio.to_thread(execute_mandate_tool, t_name, t_args)
-                            ui_sync_obj = tool_res.get("ui_sync")
-                            if ui_sync_obj:
-                                if ui_sync_obj.get("updated_profile_id"):
-                                    active_cid = str(ui_sync_obj["updated_profile_id"])
-                                if ui_sync_obj.get("target_stage"):
-                                    active_stage = int(ui_sync_obj["target_stage"])
-                            compact_res = {
-                                k: v
-                                for k, v in tool_res.items()
-                                if k not in ("workspace_snapshot", "ui_sync")
-                            }
-                            await send_safe(
-                                {
-                                    "type": "tool_call_result",
-                                    "call_id": call_id,
-                                    "tool_name": t_name,
-                                    "args": t_args,
-                                    "result": compact_res,
-                                    "ui_sync": ui_sync_obj,
-                                }
-                            )
-                            if ui_sync_obj:
-                                await broadcaster.broadcast(ui_sync_obj)
-                            f_responses.append(
-                                types.FunctionResponse(
-                                    id=fc.id, name=t_name, response=compact_res
-                                )
-                            )
-                        await live_session.send_tool_response(function_responses=f_responses)
-
-                    sc = getattr(msg, "server_content", None)
-                    if sc:
-                        if getattr(sc, "interrupted", False):
-                            accumulated_out_text = ""
-                            await send_safe({"type": "interrupted", "reason": "model_interrupted"})
-
-                        in_tr = getattr(sc, "input_transcription", None)
-                        if in_tr and in_tr.text:
-                            chunk_in = in_tr.text
-                            accumulated_in_text = (accumulated_in_text + chunk_in).strip()
-                            cleaned_in = _is_meaningful_user_speech(accumulated_in_text)
-                            if cleaned_in:
-                                user_has_spoken_meaningfully = True
+                            f_responses = []
+                            for fc in tc.function_calls:
+                                t_name = fc.name
+                                t_args = dict(fc.args) if fc.args else {}
+                                call_id = getattr(fc, "id", None) or f"live_call_{audio_seq}"
                                 await send_safe(
                                     {
-                                        "type": "input_transcript",
-                                        "turn_id": f"{current_voice_turn_id}_user",
-                                        "text": cleaned_in,
-                                        "delta": chunk_in,
-                                        "finished": bool(getattr(in_tr, "finished", False)),
+                                        "type": "tool_call_start",
+                                        "call_id": call_id,
+                                        "tool_name": t_name,
+                                        "args": t_args,
                                     }
                                 )
+                                tool_res = await asyncio.to_thread(execute_mandate_tool, t_name, t_args)
+                                ui_sync_obj = tool_res.get("ui_sync")
+                                if ui_sync_obj:
+                                    if ui_sync_obj.get("updated_profile_id"):
+                                        active_cid = str(ui_sync_obj["updated_profile_id"])
+                                    if ui_sync_obj.get("target_stage"):
+                                        active_stage = int(ui_sync_obj["target_stage"])
+                                compact_res = {
+                                    k: v
+                                    for k, v in tool_res.items()
+                                    if k not in ("workspace_snapshot", "ui_sync")
+                                }
+                                await send_safe(
+                                    {
+                                        "type": "tool_call_result",
+                                        "call_id": call_id,
+                                        "tool_name": t_name,
+                                        "args": t_args,
+                                        "result": compact_res,
+                                        "ui_sync": ui_sync_obj,
+                                    }
+                                )
+                                if ui_sync_obj:
+                                    await broadcaster.broadcast(ui_sync_obj)
+                                f_responses.append(
+                                    types.FunctionResponse(
+                                        id=fc.id, name=t_name, response=compact_res
+                                    )
+                                )
+                            await live_session.send_tool_response(function_responses=f_responses)
 
-                        mt = getattr(sc, "model_turn", None)
-                        if mt and mt.parts:
-                            for part in mt.parts:
-                                inline = getattr(part, "inline_data", None)
-                                if inline and inline.data:
-                                    audio_seq += 1
-                                    b64_pcm = base64.b64encode(inline.data).decode("ascii")
+                        sc = getattr(msg, "server_content", None)
+                        if sc:
+                            if getattr(sc, "interrupted", False):
+                                accumulated_out_text = ""
+                                await send_safe({"type": "interrupted", "reason": "model_interrupted"})
+
+                            in_tr = getattr(sc, "input_transcription", None)
+                            if in_tr and in_tr.text:
+                                chunk_in = in_tr.text
+                                accumulated_in_text = (accumulated_in_text + chunk_in).strip()
+                                cleaned_in = _is_meaningful_user_speech(accumulated_in_text)
+                                if cleaned_in:
+                                    user_has_spoken_meaningfully = True
                                     await send_safe(
                                         {
-                                            "type": "audio_out",
-                                            "seq": audio_seq,
-                                            "turn_id": current_voice_turn_id,
-                                            "pcm24_base64": b64_pcm,
-                                            "data": b64_pcm,
-                                            "sample_rate": 24000,
+                                            "type": "input_transcript",
+                                            "turn_id": f"{current_voice_turn_id}_user",
+                                            "text": cleaned_in,
+                                            "delta": chunk_in,
+                                            "finished": bool(getattr(in_tr, "finished", False)),
                                         }
                                     )
 
-                        out_tr = getattr(sc, "output_transcription", None)
-                        if out_tr and out_tr.text:
-                            accumulated_out_text += out_tr.text
-                            await send_safe(
-                                {
-                                    "type": "output_transcript",
-                                    "turn_id": current_voice_turn_id,
-                                    "role": "assistant",
-                                    "text": accumulated_out_text.strip(),
-                                    "is_streaming": True,
-                                    "finished": bool(getattr(out_tr, "finished", False)),
-                                }
-                            )
+                            mt = getattr(sc, "model_turn", None)
+                            if mt and mt.parts:
+                                for part in mt.parts:
+                                    inline = getattr(part, "inline_data", None)
+                                    if inline and inline.data:
+                                        audio_seq += 1
+                                        b64_pcm = base64.b64encode(inline.data).decode("ascii")
+                                        await send_safe(
+                                            {
+                                                "type": "audio_out",
+                                                "seq": audio_seq,
+                                                "turn_id": current_voice_turn_id,
+                                                "pcm24_base64": b64_pcm,
+                                                "data": b64_pcm,
+                                                "sample_rate": 24000,
+                                            }
+                                        )
 
-                        if getattr(sc, "turn_complete", False):
-                            if accumulated_out_text.strip():
+                            out_tr = getattr(sc, "output_transcription", None)
+                            if out_tr and out_tr.text:
+                                accumulated_out_text += out_tr.text
                                 await send_safe(
                                     {
                                         "type": "output_transcript",
                                         "turn_id": current_voice_turn_id,
                                         "role": "assistant",
                                         "text": accumulated_out_text.strip(),
-                                        "is_streaming": False,
-                                        "final": True,
+                                        "is_streaming": True,
+                                        "finished": bool(getattr(out_tr, "finished", False)),
                                     }
                                 )
-                            turn_counter += 1
-                            current_voice_turn_id = f"voice_turn_{turn_counter}"
-                            accumulated_out_text = ""
-                            accumulated_in_text = ""
-                            await send_safe({"type": "turn_complete"})
+
+                            if getattr(sc, "turn_complete", False):
+                                if accumulated_out_text.strip():
+                                    await send_safe(
+                                        {
+                                            "type": "output_transcript",
+                                            "turn_id": current_voice_turn_id,
+                                            "role": "assistant",
+                                            "text": accumulated_out_text.strip(),
+                                            "is_streaming": False,
+                                            "final": True,
+                                        }
+                                    )
+                                turn_counter += 1
+                                current_voice_turn_id = f"voice_turn_{turn_counter}"
+                                accumulated_out_text = ""
+                                accumulated_in_text = ""
+                                await send_safe({"type": "turn_complete"})
+                    if not got_any:
+                        break
             except asyncio.CancelledError:
                 pass
             except Exception as exc:

@@ -2562,10 +2562,8 @@
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       state.micAudioCtx = new AudioCtx({ sampleRate: 16000 });
       const source = state.micAudioCtx.createMediaStreamSource(stream);
-      const processor = state.micAudioCtx.createScriptProcessor(4096, 1, 1);
-      state.micProcessor = processor;
 
-      processor.onaudioprocess = (e) => {
+      const handleFloat32Frame = (input) => {
         if (!state.isRecordingVoice || state.isVoiceMuted) return;
         // CRITICAL ANTI-ECHO & RINGER GATE:
         // Never stream mic audio while ringing, while waiting for Joy's greeting, while Joy is speaking,
@@ -2579,7 +2577,6 @@
           return;
         }
 
-        const input = e.inputBuffer.getChannelData(0);
         let sum = 0;
         const pcm16 = new Int16Array(input.length);
         for (let i = 0; i < input.length; i++) {
@@ -2616,8 +2613,41 @@
         }
       };
 
-      source.connect(processor);
-      processor.connect(state.micAudioCtx.destination);
+      // Use modern AudioWorkletNode instead of deprecated ScriptProcessorNode
+      if (state.micAudioCtx.audioWorklet && typeof window.AudioWorkletNode !== 'undefined') {
+        const workletCode = `
+          class Pcm16CaptureProcessor extends AudioWorkletProcessor {
+            constructor() {
+              super();
+              this._buf = new Float32Array(4096);
+              this._offset = 0;
+            }
+            process(inputs) {
+              const ch = inputs && inputs[0] && inputs[0][0];
+              if (!ch) return true;
+              for (let i = 0; i < ch.length; i++) {
+                this._buf[this._offset++] = ch[i];
+                if (this._offset >= 4096) {
+                  this.port.postMessage(this._buf.slice(0));
+                  this._offset = 0;
+                }
+              }
+              return true;
+            }
+          }
+          registerProcessor('pcm16-capture-processor', Pcm16CaptureProcessor);
+        `;
+        const blobUrl = URL.createObjectURL(new Blob([workletCode], { type: 'application/javascript' }));
+        await state.micAudioCtx.audioWorklet.addModule(blobUrl);
+        URL.revokeObjectURL(blobUrl);
+        const workletNode = new AudioWorkletNode(state.micAudioCtx, 'pcm16-capture-processor');
+        workletNode.port.onmessage = (ev) => {
+          if (ev && ev.data) handleFloat32Frame(ev.data);
+        };
+        source.connect(workletNode);
+        workletNode.connect(state.micAudioCtx.destination);
+        state.micProcessor = workletNode;
+      }
       state.isRecordingVoice = true;
       updateCallControlIcons();
 

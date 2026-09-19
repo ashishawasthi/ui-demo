@@ -4,6 +4,18 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DBS IDEAL × DBS Joy — Corporate Mandate &amp; Signatory Governance</title>
+  <link rel="icon" type="image/png" href="/dbs-logo.png" />
+  <script>
+    // Guard against browser extensions (e.g., mce-autosize-textarea) registering duplicate custom elements
+    if (window.customElements && typeof window.customElements.define === 'function') {
+      const _origDefine = window.customElements.define.bind(window.customElements);
+      window.customElements.define = function(name, ctor, opts) {
+        if (!window.customElements.get(name)) {
+          _origDefine(name, ctor, opts);
+        }
+      };
+    }
+  </script>
   <link rel="stylesheet" href="/static/styles.css?v=20260919_v6_dbs" />
   <link rel="stylesheet" href="styles.css?v=20260919_v6_dbs" />
   <style>
@@ -1036,6 +1048,6 @@
 
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="/app.js?v=20260919_v7"></script>
+  <script src="/app.js?v=20260919_v8"></script>
 </body>
 </html>
