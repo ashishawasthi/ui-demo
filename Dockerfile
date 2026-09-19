@@ -45,7 +45,6 @@ COPY synthetic_data/ /app/synthetic_data/
 COPY scripts/ /app/scripts/
 COPY backend/ /app/backend/
 COPY frontend/ /app/frontend/
-COPY .env /app/.env
 
 RUN chmod +x /app/scripts/*.sh
 
