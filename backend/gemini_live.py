@@ -440,6 +440,40 @@ async def run_agent_chat_turn(
     global _API_KEY_VALID
     clients = get_genai_clients()
     active_cid = customer_id or "CUST-001"
+
+    # Fast-path for explicit workspace tab switching ('switch to FX', 'go to payments', 'back to change of mandate')
+    fast_tab_res = await asyncio.to_thread(_detect_tab_switch_intent, message, active_cid)
+    if fast_tab_res and fast_tab_res.get("ui_sync"):
+        ui_sync_obj = fast_tab_res["ui_sync"]
+        tab_lbl = fast_tab_res.get("tab_label", "the requested tab")
+        reply_str = f"Certainly. I have switched the workspace view to {tab_lbl}."
+        tc_entry = {
+            "call_id": "call_tab_switch_fast",
+            "tool_name": "switch_workspace_tab",
+            "args": {"tab_name": message, "customer_id": active_cid},
+            "result": {k: v for k, v in fast_tab_res.items() if k not in ("workspace_snapshot", "ui_sync")},
+            "ui_sync": ui_sync_obj,
+        }
+        if event_callback:
+            await event_callback({"type": "tool_call_result", **tc_entry})
+            await event_callback(ui_sync_obj)
+        return {
+            "status": "success",
+            "model": LOGICAL_MODEL_ID,
+            "resolved_thinking_model": THINKING_MODEL_ID,
+            "resolved_live_audio_model": LIVE_AUDIO_MODEL_ID,
+            "customer_id": str(ui_sync_obj.get("updated_profile_id") or active_cid),
+            "reply": reply_str,
+            "assistant_reply": reply_str,
+            "thinking_traces": [],
+            "thought_traces": [],
+            "tool_calls": [tc_entry],
+            "tool_executions": [tc_entry],
+            "ui_sync": ui_sync_obj,
+            "ui_sync_events": [ui_sync_obj],
+            "workspace_snapshot": fast_tab_res.get("workspace_snapshot", {}),
+        }
+
     # build_system_instruction() issues a synchronous psycopg2 query; run it off the event loop
     # so it cannot stall concurrent /ws/live audio streaming.
     sys_instruction = await asyncio.to_thread(
@@ -466,11 +500,13 @@ async def run_agent_chat_turn(
 
     async def _call_model(turn_contents: list[types.Content]) -> Any:
         global _API_KEY_VALID
-        # Try the API key client first, unless its circuit breaker is in cooldown.
+        # Try the API key client first using THINKING_MODEL_ID (`gemini-3.8-flash`).
+        # Note: LOGICAL_MODEL_ID (`models/gemini-3.8-live-extended-thinking`) only supports
+        # WebSocket BidiGenerateContent and fails unary REST generateContent with 400.
         if clients["api_key_client"] is not None and _api_key_path_available():
             try:
                 resp = await clients["api_key_client"].aio.models.generate_content(
-                    model=LOGICAL_MODEL_ID,
+                    model=THINKING_MODEL_ID,
                     contents=turn_contents,
                     config=config,
                 )
