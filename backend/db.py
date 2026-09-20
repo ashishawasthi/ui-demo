@@ -176,6 +176,14 @@ def init_db(force_reseed: bool = False) -> dict[str, Any]:
             cur.execute("SELECT COUNT(*) AS cnt FROM corporate_customers;")
             row = cur.fetchone()
             customer_count = int(row["cnt"]) if row else 0
+            # Browser-session workspace rows are tiny; drop the ones idle for more than a day.
+            cur.execute(
+                """
+                DELETE FROM active_workspace_state
+                WHERE workspace_id <> 'DEFAULT_WORKSPACE'
+                  AND updated_at < NOW() - INTERVAL '1 day';
+                """
+            )
 
     if force_reseed or customer_count < 5:
         from synthetic_data.seed import seed_all_data
@@ -220,8 +228,17 @@ def get_db_health() -> dict[str, Any]:
                     cur.execute(f"SELECT COUNT(*) AS cnt FROM {tbl};")
                     r = cur.fetchone()
                     table_counts[tbl] = int(r["cnt"]) if r else 0
+                # Report the calling browser session's active customer (falls back to the default row)
+                from backend.session import DEFAULT_WORKSPACE_ID, get_workspace_id
+
                 cur.execute(
-                    "SELECT active_customer_id FROM active_workspace_state WHERE workspace_id = 'DEFAULT_WORKSPACE';"
+                    """
+                    SELECT active_customer_id FROM active_workspace_state
+                    WHERE workspace_id IN (%s, %s)
+                    ORDER BY CASE WHEN workspace_id = %s THEN 0 ELSE 1 END
+                    LIMIT 1;
+                    """,
+                    (get_workspace_id(), DEFAULT_WORKSPACE_ID, get_workspace_id()),
                 )
                 ws_row = cur.fetchone()
                 if ws_row and ws_row.get("active_customer_id"):

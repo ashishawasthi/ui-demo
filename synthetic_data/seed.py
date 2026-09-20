@@ -1657,6 +1657,12 @@ def seed_all_data(reset_existing: bool = True) -> dict[str, int]:
             for cust in CUSTOMERS_SEED:
                 _insert_customer_bundle(cur, cust["customer_id"])
 
+            if reset_existing:
+                # Per-browser-session rows (see backend/session.py) are discarded on a full reset.
+                cur.execute(
+                    "DELETE FROM active_workspace_state WHERE workspace_id <> 'DEFAULT_WORKSPACE';"
+                )
+
             cur.execute(
                 """
                 INSERT INTO active_workspace_state (

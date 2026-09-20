@@ -24,6 +24,13 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
+from backend.session import (
+    DEFAULT_WORKSPACE_ID,
+    get_workspace_id,
+    normalize_workspace_id,
+    set_ui_sync_origin,
+    set_workspace_id,
+)
 from backend.tools import (
     MANDATE_TOOL_FUNCTIONS,
     MANDATE_TOOL_MAP,
@@ -225,6 +232,32 @@ def _trip_api_key_breaker() -> None:
 
     _API_KEY_DISABLED_UNTIL = time.monotonic() + _API_KEY_COOLDOWN_SECONDS
     _API_KEY_VALID = False
+
+
+# Per-session text chat memory (keyed by browser workspace id — see backend/session.py). Only
+# user text and the final assistant reply are kept, so follow-up questions ("now do the same for
+# Meridian") have context without replaying tool traffic. Bounded so a long demo session never
+# grows the prompt unboundedly.
+_CHAT_HISTORY: dict[str, list[types.Content]] = {}
+_CHAT_HISTORY_MAX_CONTENTS = 16
+
+
+def get_chat_history(history_key: str | None) -> list[types.Content]:
+    return list(_CHAT_HISTORY.get(history_key or DEFAULT_WORKSPACE_ID, []))
+
+
+def append_chat_history(history_key: str | None, user_text: str, reply_text: str) -> None:
+    key = history_key or DEFAULT_WORKSPACE_ID
+    history = _CHAT_HISTORY.setdefault(key, [])
+    history.append(types.Content(role="user", parts=[types.Part.from_text(text=user_text)]))
+    if reply_text:
+        history.append(types.Content(role="model", parts=[types.Part.from_text(text=reply_text)]))
+    if len(history) > _CHAT_HISTORY_MAX_CONTENTS:
+        del history[: len(history) - _CHAT_HISTORY_MAX_CONTENTS]
+
+
+def clear_chat_history(history_key: str | None) -> None:
+    _CHAT_HISTORY.pop(history_key or DEFAULT_WORKSPACE_ID, None)
 
 
 def set_runtime_api_key(api_key: str) -> dict[str, Any]:
@@ -462,8 +495,13 @@ async def run_agent_chat_turn(
     current_stage: int = 1,
     event_callback: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     allow_bridge: bool = True,
+    history_key: str | None = None,
 ) -> dict[str, Any]:
-    """Execute a multi-step Extended Thinking + Database Tool-Calling turn using `models/gemini-3.8-live-extended-thinking`."""
+    """Execute a multi-step Extended Thinking + Database Tool-Calling turn using `models/gemini-3.8-live-extended-thinking`.
+
+    ``history_key`` (the caller's browser workspace id) selects the per-session chat memory that
+    is prepended to the turn so follow-up questions keep their context.
+    """
     global _API_KEY_VALID
     clients = get_genai_clients()
     active_cid = customer_id or "CUST-001"
@@ -507,7 +545,7 @@ async def run_agent_chat_turn(
         build_system_instruction, customer_id=active_cid, current_stage=current_stage
     )
 
-    contents: list[types.Content] = [
+    contents: list[types.Content] = get_chat_history(history_key) + [
         types.Content(role="user", parts=[types.Part.from_text(text=message)])
     ]
 
@@ -783,6 +821,8 @@ async def run_agent_chat_turn(
         if latest_ui_sync is None:
             latest_ui_sync = details.get("ui_sync")
 
+    append_chat_history(history_key, message, reply_text)
+
     return {
         "status": "success",
         "model": LOGICAL_MODEL_ID,
@@ -911,6 +951,11 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
     active_cid = "CUST-001"
     active_stage = 1
     active_mode = "chat"
+    # The browser tab's session id (see backend/session.py). ASGI-scope headers cannot carry it on
+    # a raw WebSocket upgrade (browsers don't let JS set custom headers there), so the real value
+    # arrives inside the first `init` frame and is applied via bind_workspace() below.
+    workspace_id = get_workspace_id()
+    set_ui_sync_origin("live")
     clients = get_genai_clients()
 
     # Persistent native audio session for streaming microphone PCM chunks
@@ -924,6 +969,13 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
     # Exponential backoff guarding live-session reconnection (see the audio_chunk handler).
     live_session_backoff = 1.0
     live_session_retry_after = 0.0
+
+    def bind_workspace(raw_id: Any) -> None:
+        nonlocal workspace_id
+        workspace_id = normalize_workspace_id(str(raw_id or ""))
+        set_workspace_id(workspace_id)
+        if broadcaster is not None and hasattr(broadcaster, "bind"):
+            broadcaster.bind(websocket, workspace_id)
 
     async def send_safe(payload: dict[str, Any]) -> None:
         try:
@@ -1302,6 +1354,8 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                 await send_safe({"type": "pong"})
 
             elif msg_type in ("init", "sync_context"):
+                if frame.get("workspace_id"):
+                    bind_workspace(frame["workspace_id"])
                 if frame.get("customer_id"):
                     active_cid = str(frame["customer_id"])
                 if frame.get("stage") or frame.get("active_stage"):
@@ -1317,6 +1371,7 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                         "active_customer_id": active_cid,
                         "stage": active_stage,
                         "mode": active_mode,
+                        "workspace_id": workspace_id,
                         "tools_registered": list(MANDATE_TOOL_MAP.keys()),
                     }
                 )
@@ -1365,6 +1420,8 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                         await live_session.send(input="", end_of_turn=True)
 
             elif msg_type == "voice_greeting":
+                if frame.get("workspace_id"):
+                    bind_workspace(frame["workspace_id"])
                 if frame.get("customer_id"):
                     active_cid = str(frame["customer_id"])
 
@@ -1421,8 +1478,12 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
 
             elif msg_type in ("text_turn", "user_message", "chat"):
                 user_text = str(frame.get("text") or frame.get("message") or "").strip()
+                if frame.get("workspace_id"):
+                    bind_workspace(frame["workspace_id"])
                 if frame.get("customer_id"):
                     active_cid = str(frame["customer_id"])
+                if frame.get("stage") or frame.get("current_stage"):
+                    active_stage = int(frame.get("stage") or frame.get("current_stage") or active_stage)
                 if not user_text:
                     continue
 
@@ -1441,12 +1502,28 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                         }
                     )
 
-                turn_res = await run_agent_chat_turn(
-                    message=user_text,
-                    customer_id=active_cid,
-                    current_stage=active_stage,
-                    event_callback=send_safe,
-                )
+                try:
+                    turn_res = await run_agent_chat_turn(
+                        message=user_text,
+                        customer_id=active_cid,
+                        current_stage=active_stage,
+                        event_callback=send_safe,
+                        history_key=workspace_id,
+                    )
+                except Exception as exc:
+                    # A model/credential error must not drop the socket: answer in-chat and
+                    # release the composer so the user can retry.
+                    logger.warning("Chat turn failed (%s): %s", type(exc).__name__, exc)
+                    turn_res = {
+                        "customer_id": active_cid,
+                        "reply": (
+                            "I couldn't reach the Gemini model just now, so nothing was changed. "
+                            "Please try again in a moment or use the workspace controls directly."
+                        ),
+                        "thinking_traces": [],
+                        "tool_calls": [],
+                        "ui_sync": None,
+                    }
                 active_cid = str(turn_res.get("customer_id") or active_cid)
                 reply = str(turn_res.get("reply") or "")
 

@@ -28,6 +28,12 @@ A full-stack **Corporate Banking Change of Account Mandate** web application pow
    - **Stage 4**: Board Resolution Pre-Flight Audit & Live Mandate Diff
    - **Stage 5**: Digital Execution (Maker-Checker / DigiSign) & Immutable Audit Trail
 
+## Sessions, Sync & Voice (no login required)
+- Every browser tab gets its own workspace id (`sessionStorage`) sent as `X-Workspace-Id` and in the `/ws/live` `init` frame, so two people never share an active organization or stage. Sharing the URL starts a fresh session for the other person. Customer data is shared.
+- Only copilot actions (chat/voice tool calls) move the workspace between stages; your own clicks never trigger surprise navigation, and read-only lookups never toast or navigate.
+- Voice runs through the backend bridge on `/ws/live`: the browser streams 16 kHz microphone PCM to the server, which holds the Gemini Live session (and runs its tool calls) and streams Joy's 24 kHz audio back. The browser never connects to Google directly and never sees an API key.
+- Deferred work is tracked in [`task.md`](task.md).
+
 ## Quick Start
 ```bash
 cp .env.example .env
