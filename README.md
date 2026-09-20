@@ -5,6 +5,7 @@ A full-stack **Corporate Banking Change of Account Mandate** web application pow
 ## Live Google Cloud Run Deployment
 - **Primary URL**: https://gemini-live-mandate-app-327571158527.us-central1.run.app
 - **Secondary URL**: https://gemini-live-mandate-app-5p6ecehe6q-uc.a.run.app
+- **Architecture & DBS IDEAL Production POV**: [ARCHITECTURE_AND_DBS_IDEAL_POV.md](./ARCHITECTURE_AND_DBS_IDEAL_POV.md)
 
 ## Architecture & Highlights
 1. **Gemini Live 3.8 (`models/gemini-3.8-live-extended-thinking`) Voice & Chat Interface (`backend/gemini_live.py`, `backend/main.py`)**:
