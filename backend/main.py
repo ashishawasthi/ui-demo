@@ -31,6 +31,14 @@ from backend.gemini_live import (
     run_agent_chat_turn,
     set_runtime_api_key,
 )
+from backend.session import (
+    WORKSPACE_HEADER,
+    get_workspace_id,
+    reset_ui_sync_origin,
+    reset_workspace_id,
+    set_ui_sync_origin,
+    set_workspace_id,
+)
 from backend.tools import (
     SwitchActiveCustomerProfile,
     add_or_update_signatory,
@@ -56,10 +64,11 @@ logger = logging.getLogger("mandate_app.main")
 
 
 class UIEventBroadcaster:
-    """Manages active WebSocket connections to broadcast real-time `ui_sync` events."""
+    """Tracks `/ws/live` sockets per browser session and pushes `ui_sync` events only to that session."""
 
     def __init__(self) -> None:
-        self.connections: set[WebSocket] = set()
+        self.connections: dict[str, set[WebSocket]] = {}
+        self._workspace_of: dict[WebSocket, str] = {}
         # Strong references to in-flight fire-and-forget broadcast tasks. Without this the
         # event loop only holds a weak reference and the GC can destroy a pending task
         # mid-execution ("Task was destroyed but it is pending!"), silently dropping ui_sync.
@@ -71,22 +80,37 @@ class UIEventBroadcaster:
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
 
-    async def connect(self, ws: WebSocket) -> None:
+    async def connect(self, ws: WebSocket, workspace_id: str | None = None) -> None:
         await ws.accept()
-        self.connections.add(ws)
+        self.bind(ws, workspace_id or get_workspace_id())
+
+    def bind(self, ws: WebSocket, workspace_id: str) -> None:
+        """(Re)attach a socket to the workspace named in its `init` frame."""
+        previous = self._workspace_of.get(ws)
+        if previous and previous in self.connections:
+            self.connections[previous].discard(ws)
+            if not self.connections[previous]:
+                del self.connections[previous]
+        self.connections.setdefault(workspace_id, set()).add(ws)
+        self._workspace_of[ws] = workspace_id
 
     def disconnect(self, ws: WebSocket) -> None:
-        self.connections.discard(ws)
+        workspace_id = self._workspace_of.pop(ws, None)
+        if workspace_id and workspace_id in self.connections:
+            self.connections[workspace_id].discard(ws)
+            if not self.connections[workspace_id]:
+                del self.connections[workspace_id]
 
-    async def broadcast(self, message: dict[str, Any]) -> None:
+    async def broadcast(self, message: dict[str, Any], workspace_id: str | None = None) -> None:
+        target = workspace_id or message.get("workspace_id") or get_workspace_id()
         dead: list[WebSocket] = []
-        for ws in list(self.connections):
+        for ws in list(self.connections.get(target, ())):
             try:
                 await ws.send_json(message)
             except Exception:
                 dead.append(ws)
         for ws in dead:
-            self.connections.discard(ws)
+            self.disconnect(ws)
 
     def broadcast_sync(self, message: dict[str, Any]) -> None:
         """Schedule an async broadcast from a synchronous tool callback.
@@ -114,10 +138,41 @@ class UIEventBroadcaster:
             logger.debug("Dropped cross-thread ui_sync broadcast: %s", exc)
 
 
-
-
 broadcaster = UIEventBroadcaster()
 register_ui_sync_callback(broadcaster.broadcast_sync)
+
+
+def _scope_header(scope: dict[str, Any], name: str) -> str | None:
+    target = name.lower().encode("latin-1")
+    for key, value in scope.get("headers") or []:
+        if key == target:
+            return value.decode("latin-1")
+    return None
+
+
+class WorkspaceContextMiddleware:
+    """Bind each request to the browser session named by the `X-Workspace-Id` header.
+
+    REST calls are tagged origin "rest"; the live WebSocket is tagged "live" so tool events
+    raised on it are delivered inline on that socket rather than pushed a second time. A raw
+    WebSocket upgrade cannot carry this header from browser JS, so `/ws/live` re-binds itself
+    from the `workspace_id` field of its first `init` frame (see gemini_live.bind_workspace).
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope.get("type") not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+        ws_token = set_workspace_id(_scope_header(scope, WORKSPACE_HEADER))
+        origin_token = set_ui_sync_origin("live" if scope["type"] == "websocket" else "rest")
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            reset_ui_sync_origin(origin_token)
+            reset_workspace_id(ws_token)
 
 
 @asynccontextmanager
@@ -155,6 +210,7 @@ else:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+app.add_middleware(WorkspaceContextMiddleware)
 
 
 # ============================================================================
@@ -168,15 +224,21 @@ def api_health() -> dict[str, Any]:
         "status": "ok" if db_health.get("connected") else "degraded",
         "database": db_health,
         "gemini_live": gemini_status,
+        "workspace_id": get_workspace_id(),
     }
 
 
 @app.get("/api/config/live")
 def api_get_live_config() -> dict[str, Any]:
     clients = get_genai_clients()
+    # The raw key is deliberately NOT included here: this endpoint has no auth, so any caller
+    # (or anyone reading a shared demo link) could previously read the live Gemini API key out of
+    # the response and out of the settings-panel input it was echoed into. `api_key_configured`
+    # and `api_key_prefix` give the UI everything it needs to show status without the secret.
     return {
         "status": "ok",
-        "api_key": clients.get("api_key"),
+        "api_key_configured": clients.get("api_key_configured"),
+        "api_key_prefix": clients.get("api_key_prefix"),
         "model": "models/gemini-3.8-live-extended-thinking",
         "ws_endpoint": "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent",
         "thinking_config": {"thinkingLevel": "LOW"},
@@ -529,6 +591,7 @@ async def api_chat(request: Request, payload: dict[str, Any] = Body(...)) -> dic
         current_stage=current_stage,
         event_callback=broadcaster.broadcast,
         allow_bridge=allow_bridge,
+        history_key=get_workspace_id(),
     )
     if result.get("ui_sync"):
         await broadcaster.broadcast(result["ui_sync"])
@@ -537,7 +600,7 @@ async def api_chat(request: Request, payload: dict[str, Any] = Body(...)) -> dic
 
 @app.websocket("/ws/live")
 async def ws_live_endpoint(websocket: WebSocket) -> None:
-    await broadcaster.connect(websocket)
+    await broadcaster.connect(websocket, get_workspace_id())
     try:
         await handle_live_websocket_session(websocket, broadcaster)
     except WebSocketDisconnect:

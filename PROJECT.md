@@ -43,8 +43,12 @@
 | M4 | Production Containerization & Google Cloud Run Deployment | `Dockerfile`, `.dockerignore`, `scripts/docker_entrypoint.sh`, `CLOUD_RUN_URL.md` | M1, M2 | DONE |
 
 ## Interface Contracts
+### Browser sessions (no login)
+- Each browser tab generates a workspace id (`sessionStorage`, e.g. `ws_3f9a…`) and sends it as the `X-Workspace-Id` header on every REST call and inside the `/ws/live` `init` frame. It selects that tab's row in `active_workspace_state` (active customer, stage, last simulation). Requests without the header use the seeded `DEFAULT_WORKSPACE` row. Customer data itself is shared by all sessions.
+- Every tool response carries a `ui_sync` envelope with `event_id`, `workspace_id` and `origin` (`rest` | `live`). Pushes go only to sockets bound to the same workspace. The same event can reach a tab more than once (REST response, `tool_call_result` frame, `ui_sync` push); the frontend applies it once by `event_id`, whichever copy arrives first.
+
 ### Backend REST API (`backend/main.py` on port `8080`) ↔ Frontend (`frontend/app.js`)
-- `GET /api/health` → `{"status": "ok", "database": {"engine": "postgresql", "mode": "local_pg18|cloudsql", "connected": true, "customer_count": 5}, "gemini_live": {"model": "models/gemini-3.8-live-extended-thinking", "vertexai": true, "project": "elevate-data-508005"}}`
+- `GET /api/health` → `{"status": "ok", "database": {"engine": "postgresql", "mode": "local_pg18|cloudsql", "connected": true, "customer_count": 5}, "gemini_live": {"model": "models/gemini-3.8-live-extended-thinking", "vertexai": true, "project": "elevate-data-508005"}, "workspace_id": "..."}`
 - `GET /api/customers` → calls `list_customer_profiles()` and returns `{"customers": [...], "active_customer_id": "..."}`
 - `GET /api/customers/{customer_id}/mandate` → calls `get_customer_mandate_details(customer_id)` and returns full workspace snapshot (`customer`, `accounts`, `signatories`, `signing_rules`, `board_resolutions`, `applications`, `audit_logs`, `mandate_diff`, `active_stage`)
 - `POST /api/customers/switch` → body `{"customer_id": "..."}` → calls `SwitchActiveCustomerProfile(customer_id)` and broadcasts `ui_sync`
@@ -56,21 +60,21 @@
 - `POST /api/customers/{customer_id}/board-resolution/audit` → body `{"resolution_type": "BRC-09|CUSTOM", "resolution_ref": "...", "clause_text": "..."}` → calls `audit_board_resolution(...)`
 - `POST /api/customers/{customer_id}/submit` → body `{"submitted_by": "...", "resolution_ref": "...", "notes": "..."}` → calls `submit_mandate_change_request(...)`
 - `POST /api/customers/{customer_id}/cosign` → body `{"application_ref": "...", "signer_name": "...", "auth_method": "IDEAL Token"}` → calls `execute_cosigner_signature(...)`
-- `POST /api/chat` → body `{"message": "...", "customer_id": "...", "current_stage": 1}` → executes `models/gemini-3.8-live-extended-thinking` (`gemini-3.8-flash` on `global` with `ThinkingConfig(include_thoughts=True)` and all mandate tools), returning `{"reply": "...", "thinking_traces": [...], "tool_calls": [...], "ui_sync": {...}, "workspace_snapshot": {...}}` and broadcasting `ui_sync` to `/ws/live`.
+- `POST /api/chat` → body `{"message": "...", "customer_id": "...", "current_stage": 1}` → executes `models/gemini-3.8-live-extended-thinking` (`gemini-3.8-flash` on `global` with `ThinkingConfig(include_thoughts=True)` and all mandate tools) with the session's chat history (last 8 exchanges, keyed by workspace id), returning `{"reply": "...", "thinking_traces": [...], "tool_calls": [...], "ui_sync": {...}, "workspace_snapshot": {...}}`. This is the endpoint the chat composer uses; the `text_turn` WebSocket frame below runs the same turn for clients that prefer the socket.
 
 ### WebSocket `/ws/live` (`backend/main.py`) ↔ Frontend Voice/Chat Copilot (`frontend/app.js`)
 - Client → Server JSON frames:
-  - `{"type": "init", "customer_id": "CUST-001", "stage": 1, "mode": "voice|chat"}`
+  - `{"type": "init", "workspace_id": "ws_…", "customer_id": "CUST-001", "stage": 1, "mode": "voice|chat"}` (binds the socket to the tab's session)
   - `{"type": "audio_chunk", "pcm16_base64": "...", "sample_rate": 16000}`
-  - `{"type": "text_turn", "text": "...", "customer_id": "CUST-001"}`
-  - `{"type": "barge_in"}`
+  - `{"type": "text_turn", "text": "...", "workspace_id": "ws_…", "customer_id": "CUST-001", "stage": 2}`
+  - `{"type": "barge_in"}` (stops the current turn's audio; the live session and its memory are kept)
   - `{"type": "ping"}`
 - Server → Client JSON frames:
-  - `{"type": "session_ready", "model": "models/gemini-3.8-live-extended-thinking", "active_customer_id": "..."}`
+  - `{"type": "session_ready", "model": "models/gemini-3.8-live-extended-thinking", "active_customer_id": "...", "workspace_id": "..."}`
   - `{"type": "thinking_trace", "text": "..."}`
   - `{"type": "tool_call_start", "tool_name": "...", "args": {...}}`
-  - `{"type": "tool_call_result", "tool_name": "...", "result": {...}, "ui_sync": {...}}`
-  - `{"type": "ui_sync", "ui_action": "...", "target_stage": 2, "updated_profile_id": "CUST-001", "mandate_diff": {...}, "workspace_snapshot": {...}}`
+  - `{"type": "tool_call_result", "tool_name": "...", "result": {...}, "ui_sync": {...}}` (carries the same `ui_sync` envelope; applied once by `event_id`)
+  - `{"type": "ui_sync", "event_id": "...", "workspace_id": "...", "origin": "rest|live", "ui_action": "...", "target_stage": 2, "updated_profile_id": "CUST-001", "mandate_diff": {...}, "workspace_snapshot": {...}}` (pushed to every socket in this session so a second tab follows along; a tab that already applied the same `event_id` ignores it)
   - `{"type": "audio_out", "pcm24_base64": "...", "sample_rate": 24000}`
   - `{"type": "transcript", "role": "user|assistant", "text": "...", "final": true}`
   - `{"type": "turn_complete"}`

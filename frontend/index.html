@@ -785,7 +785,10 @@
           <div>
             <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
               <h3 style="font-size:14px; font-weight:600; color:var(--text-primary);">3. Activity &amp; Compliance History</h3>
-              <span class="badge badge-slate" id="auditLogCountBadge">0 Events</span>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <button type="button" class="btn btn-secondary audit-activity-toggle" id="toggleActivityLogBtn" style="display:none; padding:4px 10px; font-size:11.5px;">Show activity</button>
+                <span class="badge badge-slate" id="auditLogCountBadge">0 Events</span>
+              </div>
             </div>
             <div class="audit-log-table-wrap">
               <table class="rules-table" style="margin-bottom:0;">
@@ -1061,6 +1064,6 @@
 
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="/app.js?v=20260919_v10"></script>
+  <script src="/app.js?v=20260920_v11"></script>
 </body>
 </html>

@@ -14,8 +14,10 @@ import logging
 import random
 import re
 from typing import Any, Callable
+import uuid
 
 from backend.db import ensure_db_initialized, get_connection, serialize_row
+from backend.session import DEFAULT_WORKSPACE_ID, get_ui_sync_origin, get_workspace_id
 from synthetic_data.seed import ACCOUNTS_SEED, SIGNATORIES_SEED, SIGNING_RULES_SEED
 
 logger = logging.getLogger("mandate_app.tools")
@@ -43,11 +45,69 @@ def register_ui_sync_callback(cb: Callable[[dict[str, Any]], None]) -> None:
 
 
 def _emit_ui_sync(ui_sync: dict[str, Any]) -> None:
-    if _UI_SYNC_BROADCAST_CALLBACK is not None:
-        try:
-            _UI_SYNC_BROADCAST_CALLBACK(ui_sync)
-        except Exception as exc:
-            logger.warning("ui_sync broadcast callback failed: %s", exc)
+    """Push a ui_sync envelope to the sockets of the acting browser session.
+
+    Copilot-originated events ("live") are already delivered inline on the acting WebSocket as
+    part of the tool_call_result frame, so they are not pushed a second time here.
+    """
+    if _UI_SYNC_BROADCAST_CALLBACK is None:
+        return
+    if ui_sync.get("origin") == "live":
+        return
+    try:
+        _UI_SYNC_BROADCAST_CALLBACK(ui_sync)
+    except Exception as exc:
+        logger.warning("ui_sync broadcast callback failed: %s", exc)
+
+
+def _read_workspace_row(cur: Any) -> dict[str, Any]:
+    """Return this browser session's workspace row, falling back to the seeded default row."""
+    ws_id = get_workspace_id()
+    cur.execute("SELECT * FROM active_workspace_state WHERE workspace_id = %s;", (ws_id,))
+    row = cur.fetchone()
+    if not row and ws_id != DEFAULT_WORKSPACE_ID:
+        cur.execute(
+            "SELECT * FROM active_workspace_state WHERE workspace_id = %s;",
+            (DEFAULT_WORKSPACE_ID,),
+        )
+        row = cur.fetchone()
+    return dict(row) if row else {"active_customer_id": "CUST-001", "active_stage": 1}
+
+
+def _set_workspace_state(
+    cur: Any,
+    active_customer_id: str,
+    active_stage: int,
+    last_tool_executed: str,
+    last_simulated_amount_sgd: float | None = None,
+    last_simulated_currency: str | None = None,
+) -> None:
+    """Upsert this browser session's workspace row (created lazily on first use)."""
+    cur.execute(
+        """
+        INSERT INTO active_workspace_state (
+            workspace_id, active_customer_id, active_stage,
+            last_simulated_amount_sgd, last_simulated_currency, last_tool_executed
+        ) VALUES (%s, %s, %s, COALESCE(%s, 150000.00), COALESCE(%s, 'SGD'), %s)
+        ON CONFLICT (workspace_id) DO UPDATE SET
+            active_customer_id = EXCLUDED.active_customer_id,
+            active_stage = EXCLUDED.active_stage,
+            last_simulated_amount_sgd = COALESCE(%s, active_workspace_state.last_simulated_amount_sgd),
+            last_simulated_currency = COALESCE(%s, active_workspace_state.last_simulated_currency),
+            last_tool_executed = EXCLUDED.last_tool_executed,
+            updated_at = NOW();
+        """,
+        (
+            get_workspace_id(),
+            active_customer_id,
+            int(active_stage),
+            last_simulated_amount_sgd,
+            last_simulated_currency,
+            last_tool_executed,
+            last_simulated_amount_sgd,
+            last_simulated_currency,
+        ),
+    )
 
 
 def _resolve_customer_id(cur: Any, identifier: str | None = None) -> str:
@@ -94,12 +154,9 @@ def _resolve_customer_id(cur: Any, identifier: str | None = None) -> str:
         if row:
             return str(row["customer_id"])
 
-    # Fallback to active_workspace_state
-    cur.execute(
-        "SELECT active_customer_id FROM active_workspace_state WHERE workspace_id = 'DEFAULT_WORKSPACE';"
-    )
-    ws = cur.fetchone()
-    if ws and ws.get("active_customer_id"):
+    # Fallback to this browser session's active_workspace_state row
+    ws = _read_workspace_row(cur)
+    if ws.get("active_customer_id"):
         return str(ws["active_customer_id"])
     return "CUST-001"
 
@@ -317,10 +374,7 @@ def _fetch_workspace_snapshot(cur: Any, customer_id: str) -> dict[str, Any]:
     )
     audit_logs = serialize_row(cur.fetchall())
 
-    cur.execute(
-        "SELECT * FROM active_workspace_state WHERE workspace_id = 'DEFAULT_WORKSPACE';"
-    )
-    ws = serialize_row(cur.fetchone() or {})
+    ws = serialize_row(_read_workspace_row(cur))
 
     mandate_diff = _compute_mandate_diff(cur, customer_id)
 
@@ -358,9 +412,12 @@ def _build_response_with_ui_sync(
     toast_message: str | None = None,
     toast_severity: str = "success",
 ) -> dict[str, Any]:
-    """Attach standardized `ui_sync` envelope to tool response and broadcast to WebSocket listeners."""
+    """Attach standardized `ui_sync` envelope to tool response and push it to the acting session."""
     ui_sync = {
         "type": "ui_sync",
+        "event_id": uuid.uuid4().hex[:12],
+        "workspace_id": get_workspace_id(),
+        "origin": get_ui_sync_origin(),
         "ui_action": ui_action,
         "target_stage": target_stage,
         "updated_profile_id": updated_profile_id,
@@ -395,10 +452,7 @@ def list_customer_profiles(entity_type_filter: str | None = None) -> dict[str, A
     ensure_db_initialized()
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT active_customer_id, active_stage FROM active_workspace_state WHERE workspace_id = 'DEFAULT_WORKSPACE';"
-            )
-            ws = cur.fetchone() or {"active_customer_id": "CUST-001", "active_stage": 1}
+            ws = _read_workspace_row(cur)
             active_cid = str(ws["active_customer_id"])
 
             sql = """
@@ -510,17 +564,7 @@ def SwitchActiveCustomerProfile(
     with get_connection() as conn:
         with conn.cursor() as cur:
             cid = _resolve_customer_id(cur, ident)
-            cur.execute(
-                """
-                UPDATE active_workspace_state
-                SET active_customer_id = %s,
-                    active_stage = %s,
-                    last_tool_executed = 'SwitchActiveCustomerProfile',
-                    updated_at = NOW()
-                WHERE workspace_id = 'DEFAULT_WORKSPACE';
-                """,
-                (cid, stage),
-            )
+            _set_workspace_state(cur, cid, stage, "SwitchActiveCustomerProfile")
             cur.execute(
                 """
                 INSERT INTO mandate_audit_logs (
@@ -740,17 +784,7 @@ def add_or_update_signatory(
                 )
                 updated_sig = serialize_row(cur.fetchone())
 
-            cur.execute(
-                """
-                UPDATE active_workspace_state
-                SET active_customer_id = %s,
-                    active_stage = 2,
-                    last_tool_executed = 'add_or_update_signatory',
-                    updated_at = NOW()
-                WHERE workspace_id = 'DEFAULT_WORKSPACE';
-                """,
-                (cid,),
-            )
+            _set_workspace_state(cur, cid, 2, "add_or_update_signatory")
 
             cur.execute(
                 """
@@ -844,12 +878,10 @@ def revoke_signatory(
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            # Always check active_workspace_state first so multi-tool turns after SwitchActiveCustomerProfile stay on the switched profile
-            cur.execute(
-                "SELECT active_customer_id FROM active_workspace_state WHERE workspace_id = 'DEFAULT_WORKSPACE';"
-            )
-            ws_row = cur.fetchone()
-            ws_cid = str(ws_row["active_customer_id"]) if ws_row and ws_row.get("active_customer_id") else "CUST-001"
+            # Always check this session's workspace row first so multi-tool turns after
+            # SwitchActiveCustomerProfile stay on the switched profile
+            ws_row = _read_workspace_row(cur)
+            ws_cid = str(ws_row["active_customer_id"]) if ws_row.get("active_customer_id") else "CUST-001"
 
             cid = _resolve_customer_id(cur, resolved_cid_arg) if resolved_cid_arg else ws_cid
 
@@ -895,14 +927,7 @@ def revoke_signatory(
                 target_sig = cur.fetchone()
                 if target_sig:
                     cid = str(target_sig["customer_id"])
-                    cur.execute(
-                        """
-                        UPDATE active_workspace_state
-                        SET active_customer_id = %s, updated_at = NOW()
-                        WHERE workspace_id = 'DEFAULT_WORKSPACE';
-                        """,
-                        (cid,),
-                    )
+                    _set_workspace_state(cur, cid, 2, "revoke_signatory")
 
             if not target_sig:
                 snapshot = _fetch_workspace_snapshot(cur, cid)
@@ -1003,17 +1028,7 @@ def revoke_signatory(
             )
             revoked_sig = serialize_row(cur.fetchone())
 
-            cur.execute(
-                """
-                UPDATE active_workspace_state
-                SET active_customer_id = %s,
-                    active_stage = 2,
-                    last_tool_executed = 'revoke_signatory',
-                    updated_at = NOW()
-                WHERE workspace_id = 'DEFAULT_WORKSPACE';
-                """,
-                (cid,),
-            )
+            _set_workspace_state(cur, cid, 2, "revoke_signatory")
 
             cur.execute(
                 """
@@ -1227,17 +1242,7 @@ def configure_signing_rules(
                         (next_min, cid, t_ord + 1),
                     )
 
-            cur.execute(
-                """
-                UPDATE active_workspace_state
-                SET active_customer_id = %s,
-                    active_stage = 3,
-                    last_tool_executed = 'configure_signing_rules',
-                    updated_at = NOW()
-                WHERE workspace_id = 'DEFAULT_WORKSPACE';
-                """,
-                (cid,),
-            )
+            _set_workspace_state(cur, cid, 3, "configure_signing_rules")
 
             cur.execute(
                 """
@@ -1268,7 +1273,7 @@ def configure_signing_rules(
         target_stage=3,
         updated_profile_id=cid,
         snapshot=snapshot,
-        highlight_element=f"rule-tier-{updated_tiers[0]['tier_order']}" if updated_tiers else "stage-3",
+        highlight_element=f"rule-tier-{updated_tiers[0]['tier_order']}" if updated_tiers else "stagePanel3",
         toast_title="Signing Rules Updated",
         toast_message=f"Updated {len(updated_tiers)} signing rule tier(s) in PostgreSQL.",
     )
@@ -1392,18 +1397,13 @@ def simulate_transaction_authorization(
                     named_combination_strings.append(names_str)
                     option_idx += 1
 
-            cur.execute(
-                """
-                UPDATE active_workspace_state
-                SET active_customer_id = %s,
-                    active_stage = 3,
-                    last_simulated_amount_sgd = %s,
-                    last_simulated_currency = %s,
-                    last_tool_executed = 'simulate_transaction_authorization',
-                    updated_at = NOW()
-                WHERE workspace_id = 'DEFAULT_WORKSPACE';
-                """,
-                (cid, amount_sgd, curr_code),
+            _set_workspace_state(
+                cur,
+                cid,
+                3,
+                "simulate_transaction_authorization",
+                last_simulated_amount_sgd=amount_sgd,
+                last_simulated_currency=curr_code,
             )
 
             cur.execute(
@@ -1449,7 +1449,7 @@ def simulate_transaction_authorization(
         target_stage=3,
         updated_profile_id=cid,
         snapshot=snapshot,
-        highlight_element=f"rule-tier-{matched_tier['tier_order']}" if matched_tier else "stage-3",
+        highlight_element="simulatorResultBox",
         toast_title=f"Simulated {curr_code} {eval_amount:,.0f} (SGD {amount_sgd:,.0f})",
         toast_message=(
             f"Matched {matched_tier['tier_label']} ({matched_tier['rule_expression']}): "
@@ -1628,17 +1628,7 @@ def audit_board_resolution(
             )
             updated_res = serialize_row(cur.fetchone())
 
-            cur.execute(
-                """
-                UPDATE active_workspace_state
-                SET active_customer_id = %s,
-                    active_stage = 4,
-                    last_tool_executed = 'audit_board_resolution',
-                    updated_at = NOW()
-                WHERE workspace_id = 'DEFAULT_WORKSPACE';
-                """,
-                (cid,),
-            )
+            _set_workspace_state(cur, cid, 4, "audit_board_resolution")
 
             cur.execute(
                 """
@@ -1810,17 +1800,7 @@ def submit_mandate_change_request(
             )
             updated_app = serialize_row(cur.fetchone())
 
-            cur.execute(
-                """
-                UPDATE active_workspace_state
-                SET active_customer_id = %s,
-                    active_stage = 5,
-                    last_tool_executed = 'submit_mandate_change_request',
-                    updated_at = NOW()
-                WHERE workspace_id = 'DEFAULT_WORKSPACE';
-                """,
-                (cid,),
-            )
+            _set_workspace_state(cur, cid, 5, "submit_mandate_change_request")
 
             cur.execute(
                 """
@@ -1948,17 +1928,7 @@ def update_target_accounts(
                     (bool(included_in_mandate), cid, account_number, account_number),
                 )
 
-            cur.execute(
-                """
-                UPDATE active_workspace_state
-                SET active_customer_id = %s,
-                    active_stage = 1,
-                    last_tool_executed = 'update_target_accounts',
-                    updated_at = NOW()
-                WHERE workspace_id = 'DEFAULT_WORKSPACE';
-                """,
-                (cid,),
-            )
+            _set_workspace_state(cur, cid, 1, "update_target_accounts")
             snapshot = _fetch_workspace_snapshot(cur, cid)
 
     return _build_response_with_ui_sync(
@@ -2063,17 +2033,7 @@ def execute_cosigner_signature(
                     (cid,),
                 )
 
-            cur.execute(
-                """
-                UPDATE active_workspace_state
-                SET active_customer_id = %s,
-                    active_stage = 5,
-                    last_tool_executed = 'execute_cosigner_signature',
-                    updated_at = NOW()
-                WHERE workspace_id = 'DEFAULT_WORKSPACE';
-                """,
-                (cid,),
-            )
+            _set_workspace_state(cur, cid, 5, "execute_cosigner_signature")
 
             cur.execute(
                 """
@@ -2145,11 +2105,8 @@ def upload_nric_and_add_signatory(
     # Resolve active customer if customer_id omitted or stale
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT active_customer_id FROM active_workspace_state WHERE workspace_id = 'DEFAULT_WORKSPACE';"
-            )
-            ws_row = cur.fetchone()
-            ws_cid = str(ws_row["active_customer_id"]) if ws_row and ws_row.get("active_customer_id") else "CUST-001"
+            ws_row = _read_workspace_row(cur)
+            ws_cid = str(ws_row["active_customer_id"]) if ws_row.get("active_customer_id") else "CUST-001"
             resolved_cid = _resolve_customer_id(cur, customer_id) if customer_id else ws_cid
 
     res = add_or_update_signatory(
@@ -2548,16 +2505,7 @@ def switch_workspace_tab(
     with get_connection() as conn:
         with conn.cursor() as cur:
             cid = _resolve_customer_id(cur, customer_id)
-            cur.execute(
-                """
-                UPDATE active_workspace_state
-                SET active_stage = %s,
-                    last_tool_executed = 'switch_workspace_tab',
-                    updated_at = NOW()
-                WHERE workspace_id = 'DEFAULT'
-                """,
-                (resolved_stage,),
-            )
+            _set_workspace_state(cur, cid, resolved_stage, "switch_workspace_tab")
             snapshot = _fetch_workspace_snapshot(cur, cid)
         conn.commit()
 
@@ -2663,11 +2611,8 @@ def execute_mandate_tool(tool_name: str, args: dict[str, Any] | None = None) -> 
             try:
                 with get_connection() as conn:
                     with conn.cursor() as cur:
-                        cur.execute(
-                            "SELECT active_customer_id FROM active_workspace_state WHERE workspace_id = 'DEFAULT_WORKSPACE';"
-                        )
-                        ws_r = cur.fetchone()
-                        if ws_r and ws_r.get("active_customer_id") and ws_r["active_customer_id"] != "CUST-001":
+                        ws_r = _read_workspace_row(cur)
+                        if ws_r.get("active_customer_id") and ws_r["active_customer_id"] != "CUST-001":
                             call_args["customer_id"] = str(ws_r["active_customer_id"])
             except Exception as exc:
                 # Previously `pass`. A DB outage here silently left customer_id as the stale

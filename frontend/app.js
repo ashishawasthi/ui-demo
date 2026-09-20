@@ -45,7 +45,17 @@
     // Last real `fx_hedge_card` returned by the FX pre-trade tool. The UC3 chart is rendered
     // from this; it is never populated with placeholder rates.
     lastFxHedgeCard: null,
+    // Per-tab session identity (see backend/session.py) & apply-once ui_sync bookkeeping.
+    workspaceId: null,
+    seenUiSyncEvents: [],
+    // Composer lock while Joy is thinking, so a second submit can't race the first reply.
+    chatBusy: false,
+    // Stage 5 audit trail: read-only activity (profile switches, simulations) hidden by default.
+    showActivityLogs: false,
   };
+
+  // Audit events written by read-only operations; shown only when "activity" is toggled on.
+  const ACTIVITY_EVENT_TYPES = new Set(['PROFILE_SWITCHED', 'TRANSACTION_SIMULATED']);
 
   // ==========================================================================
   // 1. Utility Helpers & Formatting
@@ -140,8 +150,51 @@
     el.classList.add('flash-highlight');
   }
 
+  // Each browser tab gets its own workspace id (sessionStorage), so two people never share an
+  // active organization or stage and a shared URL always starts a fresh session for whoever opens it.
+  function getWorkspaceId() {
+    if (state.workspaceId) return state.workspaceId;
+    let id = null;
+    try {
+      id = sessionStorage.getItem('dbs_mandate_workspace_id');
+    } catch (_) {
+      id = null;
+    }
+    if (!id || !/^[A-Za-z0-9_-]{4,64}$/.test(id)) {
+      const bytes = new Uint8Array(8);
+      if (window.crypto && window.crypto.getRandomValues) {
+        window.crypto.getRandomValues(bytes);
+      } else {
+        for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+      }
+      id = 'ws_' + Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+      try {
+        sessionStorage.setItem('dbs_mandate_workspace_id', id);
+      } catch (_) {
+        // Storage unavailable (private mode): the id simply lives for this page load.
+      }
+    }
+    state.workspaceId = id;
+    return id;
+  }
+
+  // The backend tags every ui_sync with a stable event_id at the point it is created, and this
+  // same object can arrive on one tab more than once (a REST response, a tool_call_result frame,
+  // and a raw ui_sync push can all carry it). Whichever arrives first applies; the rest no-op.
+  function markUiSyncSeen(payload) {
+    const id = payload && payload.event_id;
+    if (!id) return false;
+    if (state.seenUiSyncEvents.includes(id)) return true;
+    state.seenUiSyncEvents.push(id);
+    if (state.seenUiSyncEvents.length > 200) state.seenUiSyncEvents.splice(0, 100);
+    return false;
+  }
+
   async function apiFetch(path, options = {}) {
-    const headers = Object.assign({ 'Content-Type': 'application/json' }, options.headers || {});
+    const headers = Object.assign(
+      { 'Content-Type': 'application/json', 'X-Workspace-Id': getWorkspaceId() },
+      options.headers || {}
+    );
     const response = await fetch(path, Object.assign({}, options, { headers }));
     let data = null;
     try {
@@ -1171,14 +1224,29 @@
       });
     }
 
-    // Render Audit Logs Table
+    // Render Audit Logs Table: mandate changes by default; read-only activity behind a toggle
     const auditLogs = snapshot.audit_logs || [];
+    const activityLogs = auditLogs.filter((log) => ACTIVITY_EVENT_TYPES.has(String(log.event_type || log.action_type || '')));
+    const changeLogs = auditLogs.filter((log) => !ACTIVITY_EVENT_TYPES.has(String(log.event_type || log.action_type || '')));
+    const visibleLogs = state.showActivityLogs ? auditLogs : changeLogs;
     const countBadge = document.getElementById('auditLogCountBadge');
+    const toggleBtn = document.getElementById('toggleActivityLogBtn');
     const tbody = document.getElementById('auditLogsTableBody');
-    if (countBadge) countBadge.textContent = `${auditLogs.length} PostgreSQL Audit Events`;
+    if (countBadge) countBadge.textContent = `${changeLogs.length} Change Event${changeLogs.length === 1 ? '' : 's'}`;
+    if (toggleBtn) {
+      toggleBtn.style.display = activityLogs.length ? '' : 'none';
+      toggleBtn.textContent = state.showActivityLogs
+        ? `Hide ${activityLogs.length} activity event${activityLogs.length === 1 ? '' : 's'}`
+        : `Show ${activityLogs.length} activity event${activityLogs.length === 1 ? '' : 's'}`;
+    }
     if (!tbody) return;
 
-    tbody.innerHTML = auditLogs
+    if (!visibleLogs.length) {
+      tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:var(--text-muted);">No mandate changes recorded yet.</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = visibleLogs
       .map((log) => {
         const ts = log.created_at || log.timestamp || '';
         const eventType = log.event_type || log.action_type || 'MANDATE_EVENT';
@@ -1288,6 +1356,7 @@
         ws.send(
           JSON.stringify({
             type: 'init',
+            workspace_id: getWorkspaceId(),
             customer_id: state.activeCustomerId || 'CUST-001',
             stage: state.activeStage || 1,
             mode: state.isRecordingVoice ? 'voice' : 'chat',
@@ -1716,6 +1785,10 @@
 
   async function handleUiSync(syncPayload) {
     if (!syncPayload) return;
+    // Every envelope carries a stable event_id and may legitimately reach this tab more than once
+    // (the REST response, the WebSocket's tool_call_result echo of the same event, and a
+    // standalone ui_sync push) — apply it exactly once, from whichever arrives first.
+    if (markUiSyncSeen(syncPayload)) return;
 
     const uiAct = String(syncPayload.ui_action || '').toUpperCase();
     const isExplicitMandateAction = [
@@ -2602,45 +2675,58 @@
     }
   }
 
+  function setChatBusy(busy) {
+    state.chatBusy = Boolean(busy);
+    const sendBtn = document.getElementById('copilotSendBtn');
+    const input = document.getElementById('copilotChatInput');
+    if (sendBtn) sendBtn.disabled = state.chatBusy;
+    if (input) input.disabled = state.chatBusy;
+  }
+
   async function sendChatPrompt(promptText) {
     const trimmed = String(promptText || '').trim();
-    if (!trimmed) return;
+    if (!trimmed || state.chatBusy) return;
 
     const userTurnId = `local_user_${Date.now()}`;
     upsertTurnMessage(userTurnId, 'user', trimmed);
     const inputEl = document.getElementById('copilotChatInput');
     if (inputEl) inputEl.value = '';
+    setChatBusy(true);
 
-    const res = await apiFetch('/api/chat', {
-      method: 'POST',
-      body: JSON.stringify({
-        message: trimmed,
-        customer_id: state.activeCustomerId || 'CUST-001',
-        current_stage: state.activeStage || 1,
-      }),
-    });
-
-    if (res.ok && res.data) {
-      const traces = res.data.thinking_traces || [];
-      traces.forEach((t) => appendThinkingTraceToStream(t));
-
-      const toolCalls = res.data.tool_calls || [];
-      toolCalls.forEach((tc, idx) => {
-        upsertToolExecutionCard(tc.call_id || `${Date.now()}_${idx}`, tc.tool_name || tc.name, tc.args || {}, tc.result || {});
+    try {
+      const res = await apiFetch('/api/chat', {
+        method: 'POST',
+        body: JSON.stringify({
+          message: trimmed,
+          customer_id: state.activeCustomerId || 'CUST-001',
+          current_stage: state.activeStage || 1,
+        }),
       });
 
-      if (res.data.reply) {
-        upsertTurnMessage(`local_bot_${Date.now()}`, 'assistant', res.data.reply);
-      }
+      if (res.ok && res.data) {
+        const traces = res.data.thinking_traces || [];
+        traces.forEach((t) => appendThinkingTraceToStream(t));
 
-      if (res.data.workspace_snapshot) {
-        applyWorkspaceSnapshot(res.data.workspace_snapshot);
+        const toolCalls = res.data.tool_calls || [];
+        toolCalls.forEach((tc, idx) => {
+          upsertToolExecutionCard(tc.call_id || `${Date.now()}_${idx}`, tc.tool_name || tc.name, tc.args || {}, tc.result || {});
+        });
+
+        if (res.data.reply) {
+          upsertTurnMessage(`local_bot_${Date.now()}`, 'assistant', res.data.reply);
+        }
+
+        if (res.data.workspace_snapshot) {
+          applyWorkspaceSnapshot(res.data.workspace_snapshot);
+        }
+        if (res.data.ui_sync) {
+          await handleUiSync(res.data.ui_sync);
+        }
+      } else {
+        appendChatMessage('assistant', 'Unable to complete request. Please check your connection.');
       }
-      if (res.data.ui_sync) {
-        await handleUiSync(res.data.ui_sync);
-      }
-    } else {
-      appendChatMessage('assistant', 'Unable to complete request. Please check your connection.');
+    } finally {
+      setChatBusy(false);
     }
   }
 
@@ -3466,9 +3552,18 @@
         }
       });
     }
+
+    const activityToggle = document.getElementById('toggleActivityLogBtn');
+    if (activityToggle) {
+      activityToggle.addEventListener('click', () => {
+        state.showActivityLogs = !state.showActivityLogs;
+        if (state.snapshot) renderStage5ExecutionAndAuditLogs(state.snapshot);
+      });
+    }
   }
 
   document.addEventListener('DOMContentLoaded', async () => {
+    getWorkspaceId();
     bindUiEvents();
     startWaveformVisualizer();
     await checkSystemHealth();
