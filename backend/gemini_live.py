@@ -397,6 +397,33 @@ def _detect_tab_switch_intent(text: str, customer_id: str = "CUST-001") -> dict[
     return None
 
 
+def _detect_voice_entity_switch(text: str, current_cid: str = "CUST-001") -> dict[str, Any] | None:
+    """Detect voice STT requests to switch the active corporate customer profile (including phonetic STT like 'Stuve Veritas Legal' or 'very task')."""
+    import re
+    from backend.tools import SwitchActiveCustomerProfile
+
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return None
+
+    # Do not trigger on compound action turns (e.g. "remove Evelyn Tan", "add Desmond") — let the model's tool chain run
+    if re.search(r"\b(revoke|remove|delete|add|promote|book|prepare|simulate|audit|submit)\b", cleaned, re.IGNORECASE):
+        return None
+
+    entity_map = [
+        (r"\b(veritas|very\s+task|veritask|stuve\s+veritas|cust-004)\b", "CUST-004"),
+        (r"\b(meridian|meridian\s+pacific|cust-002)\b", "CUST-002"),
+        (r"\b(apex|apex\s+global|cust-003)\b", "CUST-003"),
+        (r"\b(banyan|banyan\s+hospitality|cust-005)\b", "CUST-005"),
+        (r"\b(technova|tech\s+nova|cust-001)\b", "CUST-001"),
+    ]
+    for pattern, target_cid in entity_map:
+        if re.search(pattern, cleaned, re.IGNORECASE):
+            if target_cid != current_cid or re.search(r"\b(switch|stuve|go\s+to|select|change|load|open)\b", cleaned, re.IGNORECASE):
+                return SwitchActiveCustomerProfile(customer_id=target_cid)
+    return None
+
+
 def _is_bridgeable_credential_error(exc: BaseException) -> bool:
     """Return True only for credential/transport failures worth retrying via the Cloud Run bridge.
 
@@ -1001,14 +1028,18 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
             return ascii_only
 
         async def _reader_loop() -> None:
-            # `active_cid` / `active_stage` MUST be declared nonlocal. Without this, the
-            # assignments further down (from a tool's ui_sync payload) create function-local
-            # variables and the outer session state never updates.
+            # `active_cid` / `active_stage` / `last_voice_tab_switched` / `live_session` MUST be
+            # declared nonlocal. Without `last_voice_tab_switched` in `nonlocal`, Python treats it
+            # as a function-local variable because it is assigned on `turn_complete`, raising
+            # `UnboundLocalError` on the very first `input_transcription` chunk!
             nonlocal turn_counter, user_has_spoken_meaningfully, active_cid, active_stage
+            nonlocal last_voice_tab_switched, live_session, live_session_ctx
             audio_seq = 0
             current_voice_turn_id = f"voice_turn_{turn_counter}"
             accumulated_out_text = ""
             accumulated_in_text = ""
+            last_voice_tab_switched = ""
+            last_voice_entity_switched = ""
             try:
                 # Per `Get_started_LiveAPI.py` and `google.genai.live.AsyncSession.receive`:
                 # `session.receive()` yields responses for ONE model turn and breaks when
@@ -1131,6 +1162,31 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                                                 }
                                             )
                                             await broadcaster.broadcast(ui_s)
+                                    # Real-time phonetic corporate entity switch (e.g. "Stuve Veritas Legal" -> CUST-004)
+                                    if cleaned_in != last_voice_entity_switched:
+                                        ent_res = await asyncio.to_thread(
+                                            _detect_voice_entity_switch, cleaned_in, active_cid
+                                        )
+                                        if ent_res and ent_res.get("ui_sync"):
+                                            last_voice_entity_switched = cleaned_in
+                                            ui_e = ent_res["ui_sync"]
+                                            if ui_e.get("updated_profile_id"):
+                                                active_cid = str(ui_e["updated_profile_id"])
+                                            await send_safe(
+                                                {
+                                                    "type": "tool_call_result",
+                                                    "call_id": f"voice_entity_{audio_seq}",
+                                                    "tool_name": "SwitchActiveCustomerProfile",
+                                                    "args": {"customer_id": active_cid},
+                                                    "result": {
+                                                        k: v
+                                                        for k, v in ent_res.items()
+                                                        if k not in ("workspace_snapshot", "ui_sync")
+                                                    },
+                                                    "ui_sync": ui_e,
+                                                }
+                                            )
+                                            await broadcaster.broadcast(ui_e)
 
                             mt = getattr(sc, "model_turn", None)
                             if mt and mt.parts:
@@ -1183,6 +1239,7 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                                 accumulated_out_text = ""
                                 accumulated_in_text = ""
                                 last_voice_tab_switched = ""
+                                last_voice_entity_switched = ""
                                 await send_safe({"type": "turn_complete"})
                     if not got_any:
                         logger.info(
@@ -1199,6 +1256,8 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                 logger.warning("Live reader loop crashed: %s", exc, exc_info=True)
             finally:
                 logger.info("Live reader loop exited after %d audio chunks.", audio_seq)
+                # Mark the session closed so the next audio_chunk transparently reconnects
+                live_session = None
 
         logger.info("Starting live reader loop for the conversational session.")
         live_receive_task = asyncio.create_task(_reader_loop())
@@ -1273,9 +1332,6 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
             elif msg_type == "audio_chunk":
                 b64_audio = frame.get("pcm16_base64") or frame.get("data") or ""
                 if b64_audio:
-                    # Mic chunks arrive roughly every 256ms. If the live session cannot be
-                    # established, retrying on every single chunk produced ~4 connection
-                    # attempts/second against the Live API. Back off between attempts instead.
                     if live_session is None and time.monotonic() < live_session_retry_after:
                         pass
                     else:
@@ -1288,12 +1344,15 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
                                     mime_type=frame.get("mime_type") or "audio/pcm;rate=16000",
                                 )
                             )
-                            live_session_backoff = 1.0
+                            live_session_backoff = 0.5
                         except Exception as audio_err:
-                            live_session_backoff = min(live_session_backoff * 2.0, 30.0)
+                            # CRITICAL: Tear down the dead live_session so the next chunk after
+                            # the short backoff reconnects instead of looping on a dead socket!
+                            await close_live_audio_session()
+                            live_session_backoff = min(live_session_backoff * 1.5, 2.0)
                             live_session_retry_after = time.monotonic() + live_session_backoff
                             logger.warning(
-                                "Live audio chunk failed (%s); backing off %.1fs before reconnecting.",
+                                "Live audio chunk failed (%s); reconnecting in %.1fs.",
                                 audio_err,
                                 live_session_backoff,
                             )
