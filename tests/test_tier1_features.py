@@ -801,6 +801,26 @@ class TestF13CopilotDockUI:
         assert resp.status_code == 200
         assert "DBS IDEAL" in resp.text
 
+    def test_f13_07_chat_filler_covers_every_mandate_tool(self):
+        from backend.tools import MANDATE_TOOL_FUNCTIONS
+
+        js = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        assert "CHAT_FILLER_DELAY_MS" in js
+        assert "Let me check" in js
+        start = js.index("const CHAT_FILLER_BY_TOOL = {")
+        filler_map = js[start : js.index("};", start)]
+        for fn in MANDATE_TOOL_FUNCTIONS:
+            assert f"{fn.__name__.lower()}:" in filler_map, f"No chat filler phrase for {fn.__name__}"
+
+    def test_f13_08_voice_instruction_asks_joy_to_acknowledge_before_tools(self):
+        import inspect
+
+        from backend import gemini_live
+
+        assert "Let me" in gemini_live.VOICE_TOOL_ACK_RULE
+        src = inspect.getsource(gemini_live.handle_live_websocket_session)
+        assert "VOICE_TOOL_ACK_RULE" in src
+
 
 # ============================================================================
 # F14: 4-Tier E2E Test Suite & Verification Harness (5 tests)

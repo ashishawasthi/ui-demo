@@ -50,6 +50,8 @@
     seenUiSyncEvents: [],
     // Composer lock while Joy is thinking, so a second submit can't race the first reply.
     chatBusy: false,
+    // Pending "Let me check…" placeholder for the in-flight chat turn (see startChatFiller).
+    chatFiller: null,
     // Stage 5 audit trail: read-only activity (profile switches, simulations) hidden by default.
     showActivityLogs: false,
   };
@@ -1401,16 +1403,19 @@
       case 'thinking_trace':
       case 'thought_trace': {
         appendThinkingTraceToStream(msg.text || '');
+        updateChatFiller();
         break;
       }
 
       case 'tool_call_start': {
         upsertToolExecutionCard(msg.call_id || msg.tool_name, msg.tool_name, msg.args || {}, null);
+        updateChatFiller(msg.tool_name);
         break;
       }
 
       case 'tool_call_result': {
         upsertToolExecutionCard(msg.call_id || msg.tool_name, msg.tool_name, msg.args || {}, msg.result || {});
+        updateChatFiller();
         if (msg.ui_sync) {
           handleUiSync(msg.ui_sync);
         } else if (msg.result && (msg.result.ui_action || msg.result.target_stage)) {
@@ -2675,6 +2680,83 @@
     }
   }
 
+  // "Let me check…" placeholder while Joy works on a chat turn. Tools are fast; the wait is the
+  // model's thinking rounds, so nothing shows unless the reply takes longer than the delay.
+  // The bubble is client-only and never enters chat history.
+  const CHAT_FILLER_DELAY_MS = 1200;
+  const CHAT_FILLER_DEFAULT = 'Let me check…';
+  const CHAT_FILLER_BY_TOOL = {
+    list_customer_profiles: 'Let me look up your corporate profiles…',
+    get_customer_mandate_details: 'Let me pull up the mandate details…',
+    get_ideal_entity_profile: 'Let me pull up the entity profile…',
+    switchactivecustomerprofile: 'Let me switch to that organisation…',
+    switch_active_customer_profile: 'Let me switch to that organisation…',
+    switch_workspace_tab: 'Let me open that view…',
+    add_or_update_signatory: 'Let me update the signatory matrix…',
+    upload_nric_and_add_signatory: 'Let me read the NRIC and add the signatory…',
+    revoke_signatory: 'Let me check the quorum and revoke that signatory…',
+    configure_signing_rules: 'Let me update the signing rules…',
+    simulate_transaction_authorization: 'Let me simulate that transaction against the signing rules…',
+    validate_mandate_rules: 'Let me validate the mandate rules…',
+    audit_board_resolution: 'Let me audit the board resolution…',
+    submit_mandate_change_request: 'Let me submit the mandate change request…',
+    update_target_accounts: 'Let me update the target accounts…',
+    execute_cosigner_signature: 'Let me record the co-signer approval…',
+    stage_payment_to_ideal: 'Let me run the BEC check and stage the payment…',
+    run_fx_pretrade_checks: 'Let me run the FX pre-trade checks…',
+    book_fx_forward_contract: 'Let me book the FX forward contract…',
+  };
+
+  function chatFillerTextForTool(toolName) {
+    return CHAT_FILLER_BY_TOOL[String(toolName || '').toLowerCase()] || CHAT_FILLER_DEFAULT;
+  }
+
+  function renderChatFiller() {
+    const filler = state.chatFiller;
+    const stream = document.getElementById('copilotChatStream');
+    if (!filler || !stream) return;
+    if (!filler.row) {
+      const row = document.createElement('div');
+      row.className = 'ichat-row assistant chat-filler-row';
+      row.innerHTML = `
+        <div class="ichat-avatar"><img src="/dbs-logo.png" alt="DBS" /></div>
+        <div class="chat-msg assistant chat-filler" role="status" aria-live="polite">
+          <span class="chat-filler-text"></span>
+          <span class="chat-filler-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+        </div>`;
+      filler.row = row;
+    }
+    filler.row.querySelector('.chat-filler-text').textContent = filler.text;
+    // appendChild moves the row, keeping it below tool cards and traces that arrived meanwhile.
+    stream.appendChild(filler.row);
+    stream.scrollTop = stream.scrollHeight;
+  }
+
+  function startChatFiller() {
+    stopChatFiller();
+    const filler = { text: CHAT_FILLER_DEFAULT, row: null, timer: null };
+    filler.timer = setTimeout(() => {
+      filler.timer = null;
+      if (state.chatFiller === filler) renderChatFiller();
+    }, CHAT_FILLER_DELAY_MS);
+    state.chatFiller = filler;
+  }
+
+  function updateChatFiller(toolName) {
+    const filler = state.chatFiller;
+    if (!filler) return;
+    if (toolName) filler.text = chatFillerTextForTool(toolName);
+    if (filler.row) renderChatFiller();
+  }
+
+  function stopChatFiller() {
+    const filler = state.chatFiller;
+    if (!filler) return;
+    if (filler.timer) clearTimeout(filler.timer);
+    if (filler.row) filler.row.remove();
+    state.chatFiller = null;
+  }
+
   function setChatBusy(busy) {
     state.chatBusy = Boolean(busy);
     const sendBtn = document.getElementById('copilotSendBtn');
@@ -2692,6 +2774,7 @@
     const inputEl = document.getElementById('copilotChatInput');
     if (inputEl) inputEl.value = '';
     setChatBusy(true);
+    startChatFiller();
 
     try {
       const res = await apiFetch('/api/chat', {
@@ -2702,6 +2785,7 @@
           current_stage: state.activeStage || 1,
         }),
       });
+      stopChatFiller();
 
       if (res.ok && res.data) {
         const traces = res.data.thinking_traces || [];
@@ -2726,6 +2810,7 @@
         appendChatMessage('assistant', 'Unable to complete request. Please check your connection.');
       }
     } finally {
+      stopChatFiller();
       setChatBusy(false);
     }
   }
