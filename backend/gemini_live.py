@@ -86,6 +86,18 @@ JOY_VOICE_PERSONA = (
 )
 
 
+# Tools run in milliseconds, but the Live model goes silent while it thinks and waits for the
+# tool round trip. A short spoken acknowledgement fills that gap. Voice only: chat shows a
+# client-side placeholder bubble instead (see startChatFiller in frontend/app.js).
+VOICE_TOOL_ACK_RULE = (
+    "TOOL ACKNOWLEDGEMENT: Before you call a tool for the customer's request, first say one short "
+    "acknowledgement that names what you are about to check, for example 'Let me pull up the "
+    "signatory matrix.', 'Let me run the BEC check on that payment.' or 'One moment, let me check "
+    "the FX pre-trade limits.' Say it once per request, not once per tool, and do not repeat it "
+    "when you give the result. Skip it for simple tab or view switches.\n"
+)
+
+
 def build_joy_speech_config() -> types.SpeechConfig:
     """Pin the same prebuilt voice across every live-audio session.
 
@@ -992,7 +1004,9 @@ async def handle_live_websocket_session(websocket: Any, broadcaster: Any) -> Non
             build_system_instruction(customer_id=active_cid, current_stage=active_stage)
             + "\n\nVOICE MODE RULES: Keep each spoken reply to 1-3 short sentences. Never repeat "
             "yourself or state the same information twice. Brevity must not make you sound "
-            "clipped or rushed — stay soft, unhurried and courteous.\n\n"
+            "clipped or rushed — stay soft, unhurried and courteous.\n"
+            + VOICE_TOOL_ACK_RULE
+            + "\n"
             + JOY_VOICE_PERSONA
         )
 
